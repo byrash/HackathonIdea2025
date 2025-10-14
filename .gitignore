@@ -31,11 +31,8 @@ backend/ENV/
 backend/.venv
 
 # Uploaded Files & Processing Results
-backend/uploads/*.jpg
-backend/uploads/*.jpeg
-backend/uploads/*.png
-backend/uploads/*.pdf
-backend/jobs/*.json
+backend/uploads/*
+backend/jobs/*
 
 # Keep directories but ignore contents
 !backend/uploads/.gitkeep
@@ -106,6 +103,3 @@ test-data/*.pdf
 *.db
 *.sqlite
 *.sqlite3
-
-**/uploads
-**/jobs
