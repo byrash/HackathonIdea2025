@@ -881,7 +881,7 @@ check-fraud-detector/
 
 ## 👥 Team / Author
 
-**Project Created By:** mbyra1_nike  
+**Project Created By:** Me 
 **Hackathon:** TBD  
 **Date:** October 2025
 

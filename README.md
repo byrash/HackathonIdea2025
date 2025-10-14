@@ -254,7 +254,7 @@ This is a **hackathon/educational project**. For production use in financial ins
 
 ## 👥 Author
 
-**Project Created By:** mbyra1_nike  
+**Project Created By:** Me
 **Date:** October 2025  
 **Purpose:** Hackathon Demonstration
 
