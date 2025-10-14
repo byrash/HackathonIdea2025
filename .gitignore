@@ -1,0 +1,111 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.Python
+venv/
+env/
+ENV/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Virtual Environments
+backend/venv/
+backend/env/
+backend/ENV/
+backend/.venv
+
+# Uploaded Files & Processing Results
+backend/uploads/*.jpg
+backend/uploads/*.jpeg
+backend/uploads/*.png
+backend/uploads/*.pdf
+backend/jobs/*.json
+
+# Keep directories but ignore contents
+!backend/uploads/.gitkeep
+!backend/jobs/.gitkeep
+!backend/templates/.gitkeep
+!backend/ml-models/.gitkeep
+
+# ML Models (binaries)
+backend/ml-models/*.pkl
+backend/ml-models/*.h5
+backend/ml-models/*.pt
+backend/ml-models/*.pth
+backend/ml-models/*.onnx
+backend/ml-models/*.pb
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Node.js / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.angular/
+frontend/.vite/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test data (except sample templates)
+test-data/*.jpg
+test-data/*.jpeg
+test-data/*.png
+test-data/*.pdf
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+**/uploads
+**/jobs
