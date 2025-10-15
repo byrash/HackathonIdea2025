@@ -41,7 +41,6 @@ backend/jobs/*
 !backend/ml-models/.gitkeep
 
 # ML Models (binaries)
-backend/ml-models/*.pkl
 backend/ml-models/*.h5
 backend/ml-models/*.pt
 backend/ml-models/*.pth

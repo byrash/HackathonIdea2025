@@ -143,6 +143,7 @@ This stage examines the hidden data embedded in the image file to detect signs o
 #### **What is EXIF Data?**
 
 EXIF (Exchangeable Image File Format) is metadata automatically embedded in photos by cameras, scanners, and editing software. It's like a "digital fingerprint" containing:
+
 - Camera/scanner make and model
 - Date/time photo was taken
 - GPS coordinates (if available)
@@ -151,6 +152,7 @@ EXIF (Exchangeable Image File Format) is metadata automatically embedded in phot
 - Camera settings (ISO, aperture, shutter speed)
 
 **Why it matters for fraud detection:**
+
 - Edited images often have EXIF data stripped or modified
 - Software modification history reveals if Photoshop/GIMP was used
 - Date inconsistencies indicate suspicious timeline manipulation
@@ -161,19 +163,20 @@ EXIF (Exchangeable Image File Format) is metadata automatically embedded in phot
 **How it works:**
 
 1. **Read all EXIF tags from image file**
+
    ```python
    from PIL import Image
    from PIL.ExifTags import TAGS
    import exifread
-   
+
    # Method 1: PIL (Python Imaging Library)
    image = Image.open(check_path)
    exif_data = image.getexif()
-   
+
    # Method 2: exifread (more detailed)
    with open(check_path, 'rb') as f:
        tags = exifread.process_file(f)
-   
+
    # Extract key fields
    for tag_id, value in exif_data.items():
        tag_name = TAGS.get(tag_id, tag_id)
@@ -191,6 +194,7 @@ EXIF (Exchangeable Image File Format) is metadata automatically embedded in phot
    ```
 
 **Example output:**
+
 ```
 EXIF Data Extraction:
 Total fields found: 32
@@ -206,6 +210,7 @@ Key Information:
 ```
 
 **Red flags:**
+
 - ❌ **No EXIF data found** → Image likely processed to remove metadata (+30 risk points)
 - ❌ **Software: "Adobe Photoshop"** → Image was edited (+25 risk points)
 - ❌ **Different device models in metadata** → Metadata tampering
@@ -215,6 +220,7 @@ Key Information:
 #### **B. Date/Time Verification**
 
 **What it does:**
+
 - Compares creation date, modification date, and file system date
 - Detects impossible timelines (future dates, inconsistencies)
 - Flags suspicious time gaps between capture and submission
@@ -222,29 +228,31 @@ Key Information:
 **How it works:**
 
 1. **Extract all date fields**
+
    ```python
    # EXIF dates
    date_original = parse_exif_date(exif_data.get('DateTimeOriginal'))
    date_digitized = parse_exif_date(exif_data.get('DateTimeDigitized'))
    date_modified = parse_exif_date(exif_data.get('DateTime'))
-   
+
    # File system dates
    file_created = os.path.getctime(image_path)
    file_modified = os.path.getmtime(image_path)
    ```
 
 2. **Check for inconsistencies**
+
    ```python
    issues = []
-   
+
    # Future date check
    if date_original > datetime.now():
        issues.append("Image dated in the future!")
-   
+
    # Modified before original check
    if date_modified < date_original:
        issues.append("Modified date before creation date")
-   
+
    # Large time gap (suspicious)
    time_diff = (date_modified - date_original).total_seconds()
    if time_diff > 3600:  # More than 1 hour
@@ -252,6 +260,7 @@ Key Information:
    ```
 
 **Example output:**
+
 ```
 Date/Time Analysis:
 - Original: 2025-10-15 14:23:45
@@ -266,6 +275,7 @@ Issues detected:
 ```
 
 **Legitimate timeline:**
+
 ```
 Date/Time Analysis:
 - Original: 2025-10-15 14:23:45
@@ -283,6 +293,7 @@ Date/Time Analysis:
 #### **C. Camera/Scanner Detection**
 
 **What it does:**
+
 - Identifies if check was photographed or scanned
 - Validates device model authenticity
 - Flags unusual or suspicious capture devices
@@ -290,10 +301,11 @@ Date/Time Analysis:
 **How it works:**
 
 1. **Parse device information**
+
    ```python
    device_make = exif_data.get('Make', '').lower()
    device_model = exif_data.get('Model', '').lower()
-   
+
    # Categorize device type
    scanner_keywords = ['scanner', 'scan', 'hp', 'epson', 'canon scanner']
    mobile_keywords = ['iphone', 'samsung', 'pixel', 'oneplus', 'xiaomi']
@@ -305,21 +317,22 @@ Date/Time Analysis:
    if any(kw in device_model for kw in scanner_keywords):
        device_type = "Scanner"
        risk_factor = 10  # Scanned checks slightly more risky
-       
+
    elif any(kw in device_model for kw in mobile_keywords):
        device_type = "Mobile Phone"
        risk_factor = 0  # Normal for check deposits
-       
+
    elif any(kw in device_model for kw in camera_keywords):
        device_type = "Digital Camera"
        risk_factor = 5  # Less common but acceptable
-       
+
    else:
        device_type = "Unknown"
        risk_factor = 15  # Unknown devices are suspicious
    ```
 
 **Example output:**
+
 ```
 Device Detection:
 - Type: Mobile Phone (iPhone 12 Pro)
@@ -334,6 +347,7 @@ Device characteristics:
 ```
 
 **Suspicious device:**
+
 ```
 Device Detection:
 - Type: Scanner (HP ScanJet)
@@ -352,6 +366,7 @@ Concerns:
 #### **D. Software Modification Detection**
 
 **What it does:**
+
 - Detects if photo editing software was used
 - Identifies the specific programs (Photoshop, GIMP, etc.)
 - Flags checks that were digitally altered
@@ -359,10 +374,11 @@ Concerns:
 **How it works:**
 
 1. **Check Software EXIF field**
+
    ```python
    software = exif_data.get('Software', '').lower()
    processing_software = exif_data.get('ProcessingSoftware', '').lower()
-   
+
    editing_programs = {
        'photoshop': 25,      # Adobe Photoshop (+25 risk)
        'gimp': 25,           # GIMP editor (+25 risk)
@@ -371,7 +387,7 @@ Concerns:
        'paint': 20,          # MS Paint (+20 risk)
        'snapseed': 10,       # Mobile editor (+10 risk)
    }
-   
+
    for program, risk_points in editing_programs.items():
        if program in software or program in processing_software:
            detected_software.append(program)
@@ -379,6 +395,7 @@ Concerns:
    ```
 
 2. **Check for editing artifacts**
+
    ```python
    # Look for suspicious EXIF fields
    suspicious_fields = [
@@ -387,13 +404,14 @@ Concerns:
        'ProcessingSoftware',         # Processing tools
        'CreatorTool',                # Creation software
    ]
-   
+
    for field in suspicious_fields:
        if field in exif_data:
            editing_indicators.append(field)
    ```
 
 **Example output - EDITED:**
+
 ```
 Software Detection:
 Software found: Adobe Photoshop CC 2023
@@ -411,6 +429,7 @@ Recommendation: Manual review required
 ```
 
 **Example output - CLEAN:**
+
 ```
 Software Detection:
 Software found: None
@@ -427,6 +446,7 @@ Processing detected: No
 #### **E. EXIF Completeness Check**
 
 **What it does:**
+
 - Counts how many EXIF fields are present
 - Compares against expected baseline
 - Flags suspiciously incomplete metadata
@@ -447,21 +467,22 @@ expected_fields = {
 if exif_field_count == 0:
     risk = "CRITICAL"  # +30 points
     message = "All EXIF data stripped (major red flag)"
-    
+
 elif exif_field_count < 5:
     risk = "HIGH"  # +20 points
     message = "Very few EXIF fields (likely edited)"
-    
+
 elif exif_field_count < 15:
     risk = "MEDIUM"  # +10 points
     message = "Below-average EXIF data"
-    
+
 else:
     risk = "LOW"  # +0 points
     message = "Normal EXIF data present"
 ```
 
 **Example output:**
+
 ```
 EXIF Completeness:
 - Fields present: 2 out of 30+ expected
@@ -502,6 +523,7 @@ This stage uses advanced image forensics techniques to detect digital manipulati
 #### **A. Error Level Analysis (ELA)**
 
 **What it does:**
+
 - Analyzes JPEG compression artifacts to detect edited regions
 - Edited areas have different compression levels than original parts
 - Reveals areas that were added, modified, or copy-pasted after the original photo
@@ -509,18 +531,21 @@ This stage uses advanced image forensics techniques to detect digital manipulati
 **How it works:**
 
 1. **Resave the image at known quality (95%)**
+
    ```python
    # Save image again with specific JPEG quality
    cv2.imwrite(temp_path, image, [cv2.IMWRITE_JPEG_QUALITY, 95])
    ```
 
 2. **Calculate pixel-level differences**
+
    ```python
    # Subtract recompressed image from original
    ela_image = cv2.absdiff(original, recompressed)
    ```
 
 3. **Amplify the differences**
+
    ```python
    # Scale differences to make them visible (multiply by 10-20x)
    ela_amplified = cv2.convertScaleAbs(ela_image, alpha=10, beta=0)
@@ -532,6 +557,7 @@ This stage uses advanced image forensics techniques to detect digital manipulati
    - **If a check amount or signature is brighter than the rest → likely forged**
 
 **Example output:**
+
 ```
 ELA Results:
 - Suspicious regions: 3 areas detected
@@ -544,6 +570,7 @@ ELA Results:
 ```
 
 **Why it matters:**
+
 - If someone changes "$100.00" to "$1000.00" in Photoshop, that edited text will have different compression than the original check
 - Copy-pasted signatures from other documents will show up as high-error regions
 - Scanned checks that haven't been edited will show uniform, low error levels
@@ -553,6 +580,7 @@ ELA Results:
 #### **B. Clone Detection**
 
 **What it does:**
+
 - Finds duplicated or copy-pasted regions within the same image
 - Detects if someone copied one part of the check to another location
 - Common fraud: copying signature to a different check or duplicating amounts
@@ -560,11 +588,13 @@ ELA Results:
 **How it works:**
 
 1. **Convert to grayscale for analysis**
+
    ```python
    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
    ```
 
 2. **Divide image into overlapping blocks (16x16 pixels)**
+
    ```python
    # Extract features from each block
    for y in range(0, height-16, 8):  # 50% overlap
@@ -574,6 +604,7 @@ ELA Results:
    ```
 
 3. **Compute feature vectors for each block**
+
    ```python
    # Use DCT (Discrete Cosine Transform) for compact representation
    dct = cv2.dct(block.astype(np.float32))
@@ -582,10 +613,11 @@ ELA Results:
    ```
 
 4. **Compare all blocks to find duplicates**
+
    ```python
    # Use KD-Tree for fast nearest neighbor search
    tree = KDTree(all_features)
-   
+
    # Find blocks that are too similar (< threshold distance)
    for idx, feature in enumerate(all_features):
        matches = tree.query_radius(feature, r=threshold)
@@ -594,17 +626,19 @@ ELA Results:
    ```
 
 5. **Filter out false positives**
+
    ```python
    # Ignore white background regions
    if np.mean(block) > 240 or np.std(block) < 5:
        continue  # Skip blank areas
-   
+
    # Require minimum distance between clones
    if distance(block1_pos, block2_pos) < 50_pixels:
        continue  # Too close, probably just overlap
    ```
 
 **Example output:**
+
 ```
 Clone Detection Results:
 - Cloned regions found: 2 pairs
@@ -621,6 +655,7 @@ Clone Detection Results:
 ```
 
 **Real-world scenarios detected:**
+
 - ✅ Copying a signature from one check to another
 - ✅ Duplicating the amount field
 - ✅ Copy-pasting bank logos or stamps
@@ -628,6 +663,7 @@ Clone Detection Results:
 - ❌ Not triggered by: printed repeated patterns, watermarks, background textures
 
 **Technical details:**
+
 - **Algorithm:** Block-based DCT matching with KD-Tree acceleration
 - **Block size:** 16x16 pixels with 50% overlap
 - **Feature space:** 64-dimensional DCT coefficient vectors
@@ -640,6 +676,7 @@ Clone Detection Results:
 #### **C. Edge Analysis**
 
 **What it does:**
+
 - Detects irregular boundaries and edges that shouldn't exist
 - Finds white-out, correction fluid, or physical alterations
 - Identifies cut-and-paste boundaries from different documents
@@ -647,12 +684,14 @@ Clone Detection Results:
 **How it works:**
 
 1. **Detect all edges using Canny algorithm**
+
    ```python
    # Multi-stage edge detection
    edges = cv2.Canny(gray, threshold1=50, threshold2=150)
    ```
 
 2. **Apply morphological operations to find connected regions**
+
    ```python
    # Close small gaps to connect edge fragments
    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
@@ -660,15 +699,16 @@ Clone Detection Results:
    ```
 
 3. **Find contours and analyze their properties**
+
    ```python
-   contours, _ = cv2.findContours(edges_closed, cv2.RETR_EXTERNAL, 
+   contours, _ = cv2.findContours(edges_closed, cv2.RETR_EXTERNAL,
                                    cv2.CHAIN_APPROX_SIMPLE)
-   
+
    for contour in contours:
        # Calculate shape properties
        area = cv2.contourArea(contour)
        perimeter = cv2.arcLength(contour, True)
-       
+
        # Detect irregular shapes
        circularity = 4 * np.pi * area / (perimeter ** 2)
        if circularity < 0.3:  # Very irregular
@@ -676,11 +716,12 @@ Clone Detection Results:
    ```
 
 4. **Look for suspicious patterns**
+
    ```python
    # Detect straight-line boundaries (cut-and-paste indicators)
-   lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, 
+   lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180,
                            threshold=50, minLineLength=50, maxLineGap=10)
-   
+
    # Check for too-perfect rectangles (photo splicing)
    for contour in contours:
        approx = cv2.approxPolyDP(contour, epsilon=0.02*perimeter, closed=True)
@@ -693,13 +734,14 @@ Clone Detection Results:
    # Divide image into grid
    for region in grid_regions:
        edge_density = np.sum(edges[region]) / region_area
-       
+
        # Flag regions with abnormally high or low edge density
        if edge_density > mean_density * 2.5:
            anomalous_regions.append(region)
    ```
 
 **Example output:**
+
 ```
 Edge Analysis Results:
 - Irregular edges detected: 5 regions
@@ -707,12 +749,12 @@ Edge Analysis Results:
   Type: Rectangular boundary
   Edge density: 3.2x normal
   → Suspicious white-out or correction fluid detected
-  
+
 - Edge Anomaly 2: (x:180, y:280, size:200x80)
   Type: Straight-line boundary
   Edge density: 4.1x normal
   → Possible cut-and-paste from another document
-  
+
 - Edge Anomaly 3: (x:320, y:100, size:150x40)
   Type: Irregular contour
   Circularity: 0.18 (very irregular)
@@ -720,6 +762,7 @@ Edge Analysis Results:
 ```
 
 **What triggers edge anomalies:**
+
 - ✅ White-out or correction fluid (creates sharp, unnatural boundaries)
 - ✅ Photoshopped regions (perfect rectangles with high edge density)
 - ✅ Cut-and-paste from other documents (mismatched backgrounds)
@@ -728,6 +771,7 @@ Edge Analysis Results:
 - ❌ Not triggered by: Normal printed text, legitimate bank patterns, watermarks
 
 **Technical details:**
+
 - **Algorithm:** Canny edge detection + contour analysis + Hough transform
 - **Edge detection thresholds:** Low=50, High=150
 - **Morphological kernel:** 5x5 rectangle for closing
@@ -743,6 +787,7 @@ This stage analyzes security features that legitimate checks have but counterfei
 #### **A. Watermark Detection**
 
 **What it does:**
+
 - Detects faint background patterns or logos embedded in legitimate checks
 - Identifies security watermarks that are hard to reproduce
 - Distinguishes between printed checks and professionally printed bank checks
@@ -750,6 +795,7 @@ This stage analyzes security features that legitimate checks have but counterfei
 **How it works:**
 
 1. **Convert to frequency domain using FFT**
+
    ```python
    # Transform image to frequency space
    f_transform = np.fft.fft2(gray_image)
@@ -758,10 +804,11 @@ This stage analyzes security features that legitimate checks have but counterfei
    ```
 
 2. **Analyze magnitude spectrum**
+
    ```python
    # Look for periodic patterns (watermarks create regular frequencies)
    magnitude_log = 20 * np.log(magnitude + 1)
-   
+
    # Apply high-pass filter to isolate watermark frequencies
    rows, cols = magnitude.shape
    crow, ccol = rows//2, cols//2
@@ -771,29 +818,32 @@ This stage analyzes security features that legitimate checks have but counterfei
    ```
 
 3. **Detect watermark patterns**
+
    ```python
    # Inverse FFT to get spatial watermark
    watermark = np.fft.ifft2(np.fft.ifftshift(filtered))
    watermark_real = np.abs(watermark)
-   
+
    # Threshold to find watermark regions
    threshold = np.percentile(watermark_real, 95)
    watermark_regions = watermark_real > threshold
    ```
 
 4. **Verify watermark characteristics**
+
    ```python
    # Count watermark pixels
    watermark_coverage = np.sum(watermark_regions) / total_pixels
-   
+
    # Detect if watermark has expected pattern
    contours, _ = cv2.findContours(watermark_regions.astype(np.uint8), ...)
-   
+
    if watermark_coverage > 0.05 and len(contours) > 10:
        watermark_detected = True
    ```
 
 **Example output:**
+
 ```
 Watermark Detection:
 - Watermark found: Yes
@@ -807,6 +857,7 @@ Watermark Detection:
 ```
 
 **What indicates a watermark:**
+
 - ✅ Faint repeating patterns visible in background
 - ✅ "VOID" or bank name repeated across check
 - ✅ Subtle color shifts in paper
@@ -818,6 +869,7 @@ Watermark Detection:
 #### **B. Template Matching (Most Important!)**
 
 **What it does:**
+
 - Compares uploaded check against database of known legitimate bank check designs
 - Verifies if check matches the claimed bank's official template
 - **No match = major fraud indicator (fake bank or counterfeit check)**
@@ -825,6 +877,7 @@ Watermark Detection:
 **How it works:**
 
 1. **Load all templates from database**
+
    ```python
    templates = []
    for template_file in Path("./templates").glob("*.jpg"):
@@ -833,53 +886,58 @@ Watermark Detection:
    ```
 
 2. **Resize check and templates to standard size**
+
    ```python
    check_resized = cv2.resize(check_image, (800, 400))
    template_resized = cv2.resize(template_image, (800, 400))
    ```
 
 3. **Phase 1: Template Matching (Correlation)**
+
    ```python
    # Use normalized cross-correlation
-   result = cv2.matchTemplate(check_resized, template_resized, 
+   result = cv2.matchTemplate(check_resized, template_resized,
                                cv2.TM_CCOEFF_NORMED)
    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-   
+
    template_similarity = max_val  # 0.0 to 1.0
    ```
 
 4. **Phase 2: Feature Matching (SIFT + FLANN)**
+
    ```python
    # Detect keypoints using SIFT
    sift = cv2.SIFT_create()
    kp1, des1 = sift.detectAndCompute(check_resized, None)
    kp2, des2 = sift.detectAndCompute(template_resized, None)
-   
+
    # Match features using FLANN
    flann = cv2.FlannBasedMatcher(index_params, search_params)
    matches = flann.knnMatch(des1, des2, k=2)
-   
+
    # Apply Lowe's ratio test (filter good matches)
    good_matches = []
    for m, n in matches:
        if m.distance < 0.7 * n.distance:  # Keep only strong matches
            good_matches.append(m)
-   
+
    feature_match_ratio = len(good_matches) / len(kp1)
    ```
 
 5. **Combine scores**
+
    ```python
    # Weighted average of both methods
-   combined_score = (template_similarity * 0.5 + 
+   combined_score = (template_similarity * 0.5 +
                      feature_match_ratio * 0.5) * 100
-   
+
    if combined_score > 60:
        matched = True
        best_match = template_name
    ```
 
 **Example output:**
+
 ```
 Template Matching Results:
 - Best match: wells_fargo_personal
@@ -896,6 +954,7 @@ Matched features:
 ```
 
 **No match example:**
+
 ```
 Template Matching Results:
 - Best match: None
@@ -908,6 +967,7 @@ Warning: Check design does not match any known bank
 ```
 
 **Why this is critical:**
+
 - Fraudsters often create fake checks with made-up bank names
 - Even if they claim "Wells Fargo," the layout won't match real Wells Fargo checks
 - **Template matching catches 70%+ of counterfeit checks immediately**
@@ -918,6 +978,7 @@ Warning: Check design does not match any known bank
 #### **C. Security Pattern Detection**
 
 **What it does:**
+
 - Looks for microprinting (tiny text visible only under magnification)
 - Detects security threads and holographic patterns
 - Identifies background line patterns and color-shifting ink
@@ -925,33 +986,35 @@ Warning: Check design does not match any known bank
 **How it works:**
 
 1. **Microprinting Detection**
+
    ```python
    # Apply edge detection to find very fine details
    edges = cv2.Canny(gray, 100, 200)
-   
+
    # Count edge density in small regions (5x5 pixels)
    for y in range(0, height, 5):
        for x in range(0, width, 5):
            region = edges[y:y+5, x:x+5]
            density = np.sum(region) / 25
-           
+
            # High edge density = microprinting
            if density > 0.6:
                microprint_regions.append((x, y))
    ```
 
 2. **Parallel Line Detection (Security Backgrounds)**
+
    ```python
    # Hough Line Transform to find parallel lines
    lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180,
                            threshold=50, minLineLength=100, maxLineGap=10)
-   
+
    # Group lines by angle
    parallel_groups = defaultdict(list)
    for line in lines:
        angle = calculate_angle(line)
        parallel_groups[round(angle/5)*5].append(line)
-   
+
    # Large groups of parallel lines = security pattern
    for angle, group in parallel_groups.items():
        if len(group) > 20:
@@ -963,38 +1026,41 @@ Warning: Check design does not match any known bank
    ```
 
 3. **Color Pattern Analysis**
+
    ```python
    # Split into color channels
    b, g, r = cv2.split(image)
-   
+
    # Look for color-shifting patterns
    color_variance = np.std([b, g, r], axis=0)
-   
+
    # High variance in specific regions = security ink
    if np.mean(color_variance) > threshold:
        color_security_detected = True
    ```
 
 **Example output:**
+
 ```
 Security Pattern Detection:
 - Microprinting detected: Yes
   Regions: 45 areas with fine detail
   Typical location: Border edges, signature line
-  
+
 - Parallel security lines: Yes
   Pattern: 67 parallel lines at 45° angle
   Spacing: 2.3mm uniform
-  
+
 - Background pattern: Detected
   Type: Repetitive guilloche (wavy lines)
   Coverage: 85% of check background
-  
+
 - Color-shifting ink: Not detected
   (Common in higher-security checks)
 ```
 
 **What legitimate checks have:**
+
 - ✅ Microprinted text on borders (reads "SECURE" or bank name)
 - ✅ 50-100+ parallel background lines
 - ✅ Guilloche patterns (complex wavy line designs)
