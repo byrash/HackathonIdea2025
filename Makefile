@@ -1,4 +1,4 @@
-.PHONY: help install install-backend install-frontend start start-backend start-frontend stop clean
+.PHONY: help install install-backend install-frontend start start-backend start-frontend start-fresh stop clean clean-data templates ml-model
 
 # Default target
 help:
@@ -13,12 +13,16 @@ help:
 	@echo ""
 	@echo "\033[1;33m🚀 Running:\033[0m"
 	@echo "  \033[1;32mmake start\033[0m          - Start both backend and frontend"
+	@echo "  \033[1;32mmake start-fresh\033[0m    - Clear data and start fresh"
 	@echo "  \033[1;32mmake start-backend\033[0m  - Start backend only"
 	@echo "  \033[1;32mmake start-frontend\033[0m - Start frontend only"
 	@echo ""
 	@echo "\033[1;33m🛠️  Maintenance:\033[0m"
 	@echo "  \033[1;32mmake stop\033[0m           - Stop all running processes"
-	@echo "  \033[1;32mmake clean\033[0m          - Clean up generated files"
+	@echo "  \033[1;32mmake clean-data\033[0m     - Clear uploads and jobs only"
+	@echo "  \033[1;32mmake clean\033[0m          - Clean up all generated files"
+	@echo "  \033[1;32mmake templates\033[0m      - Generate sample check templates"
+	@echo "  \033[1;32mmake ml-model\033[0m       - Generate ML fraud detection model"
 	@echo ""
 	@echo "\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
 
@@ -29,7 +33,12 @@ install: install-backend install-frontend
 # Install backend dependencies
 install-backend:
 	@echo "\033[1;34m📦 Installing backend dependencies...\033[0m"
-	cd backend && python -m venv .venv
+	@if [ ! -d "backend/.venv" ]; then \
+		echo "\033[1;33m📦 Creating virtual environment...\033[0m"; \
+		cd backend && python -m venv .venv; \
+	else \
+		echo "\033[1;33m✓ Virtual environment already exists\033[0m"; \
+	fi
 	cd backend && ./.venv/bin/pip install -r requirements.txt
 	@echo "\033[1;32m✓ Backend dependencies installed!\033[0m"
 
@@ -40,7 +49,7 @@ install-frontend:
 	@echo "\033[1;32m✓ Frontend dependencies installed!\033[0m"
 
 # Start both backend and frontend
-start: install
+start: clean-data install
 	@echo "\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
 	@echo "\033[1;35m🚀 Starting Fraud Detection System\033[0m"
 	@echo "\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
@@ -66,12 +75,35 @@ start-frontend:
 	@echo "\033[1;32m🟢 Starting frontend on http://localhost:4200...\033[0m"
 	cd frontend && npm run serve
 
+# Start fresh with clean data
+start-fresh: clean-data start
+	@echo "\033[1;32m✓ Started with fresh data!\033[0m"
+
 # Stop all processes (useful if running in background)
 stop:
 	@echo "\033[1;33m⏹️  Stopping all services...\033[0m"
 	@pkill -f "uvicorn main:app" || true
 	@pkill -f "vite" || true
 	@echo "\033[1;32m✓ All services stopped!\033[0m"
+
+# Clean only uploads and jobs data
+clean-data:
+	@echo "\033[1;33m🗑️  Clearing uploads and jobs...\033[0m"
+	@rm -f backend/uploads/*.jpg backend/uploads/*.jpeg backend/uploads/*.png backend/uploads/*.pdf 2>/dev/null || true
+	@rm -f backend/jobs/*.json 2>/dev/null || true
+	@echo "\033[1;32m✓ Data cleared! (uploads: 0 files, jobs: 0 files)\033[0m"
+
+# Generate sample check templates
+templates:
+	@echo "\033[1;34m🏦 Generating sample check templates...\033[0m"
+	cd backend && ./.venv/bin/python generate_sample_templates.py
+	@echo "\033[1;32m✓ Templates generated!\033[0m"
+
+# Generate ML model
+ml-model:
+	@echo "\033[1;34m🤖 Generating ML fraud detection model...\033[0m"
+	cd backend && ./.venv/bin/python setup_ml_model.py --option simple
+	@echo "\033[1;32m✓ ML model generated!\033[0m"
 
 # Clean up generated files
 clean:

@@ -212,19 +212,255 @@ import { AnalysisResults, ApiService } from '../services/api.service';
           </div>
         </div>
       </div>
+
+      <!-- Technical Details (Expandable) -->
+      <div class="bg-white rounded-lg shadow-lg p-6">
+        <button 
+          (click)="showTechnicalDetails = !showTechnicalDetails"
+          class="w-full flex items-center justify-between text-left group"
+        >
+          <h3 class="text-xl font-bold text-gray-800 flex items-center">
+            <span class="mr-2">🔧</span>
+            Technical Details & Raw Data
+          </h3>
+          <svg 
+            class="w-6 h-6 text-gray-600 transform transition-transform"
+            [class.rotate-180]="showTechnicalDetails"
+            fill="none" 
+            stroke="currentColor" 
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+          </svg>
+        </button>
+
+        <div *ngIf="showTechnicalDetails" class="mt-6 space-y-6">
+          <!-- EXIF Metadata -->
+          <div class="border-t pt-4">
+            <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
+              📸 EXIF Metadata ({{ getExifFieldCount() }} fields)
+            </h4>
+            <div *ngIf="results.metadata_analysis?.has_metadata" class="bg-gray-50 rounded-lg p-4">
+              <!-- Camera Info -->
+              <div *ngIf="results.metadata_analysis?.camera_analysis?.device_found" class="mb-4 p-3 bg-white rounded border">
+                <p class="text-xs font-semibold text-gray-600 mb-2">Device Information</p>
+                <div class="text-sm space-y-1">
+                  <p *ngIf="results.metadata_analysis?.camera_analysis?.camera_make">
+                    <span class="font-medium">Make:</span> {{ results.metadata_analysis.camera_analysis.camera_make }}
+                  </p>
+                  <p *ngIf="results.metadata_analysis?.camera_analysis?.camera_model">
+                    <span class="font-medium">Model:</span> {{ results.metadata_analysis.camera_analysis.camera_model }}
+                  </p>
+                  <p *ngIf="results.metadata_analysis?.camera_analysis?.software">
+                    <span class="font-medium">Software:</span> 
+                    <span [class.text-red-600]="results.metadata_analysis.camera_analysis.software.toLowerCase().includes('photoshop')">
+                      {{ results.metadata_analysis.camera_analysis.software }}
+                    </span>
+                  </p>
+                  <p *ngIf="results.metadata_analysis?.camera_analysis?.is_scanner" class="text-blue-600">
+                    ✓ Scanner device detected
+                  </p>
+                  <p *ngIf="results.metadata_analysis?.camera_analysis?.is_mobile" class="text-blue-600">
+                    📱 Mobile device detected
+                  </p>
+                </div>
+              </div>
+
+              <!-- Date Information -->
+              <div *ngIf="results.metadata_analysis?.creation_date_analysis?.date_found" class="mb-4 p-3 bg-white rounded border">
+                <p class="text-xs font-semibold text-gray-600 mb-2">Date & Time</p>
+                <div class="text-sm space-y-1">
+                  <p *ngIf="results.metadata_analysis?.creation_date_analysis?.creation_date">
+                    <span class="font-medium">Created:</span> {{ results.metadata_analysis.creation_date_analysis.creation_date }}
+                  </p>
+                  <p *ngIf="results.metadata_analysis?.creation_date_analysis?.modified_date">
+                    <span class="font-medium">Modified:</span> {{ results.metadata_analysis.creation_date_analysis.modified_date }}
+                  </p>
+                  <div *ngIf="results.metadata_analysis?.creation_date_analysis?.inconsistencies?.length > 0" class="mt-2">
+                    <p *ngFor="let issue of results.metadata_analysis.creation_date_analysis.inconsistencies" class="text-red-600 text-xs">
+                      ⚠️ {{ issue }}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- All EXIF Fields (Collapsible) -->
+              <div class="mb-4">
+                <button 
+                  (click)="showAllExif = !showAllExif"
+                  class="text-sm text-blue-600 hover:text-blue-700 flex items-center"
+                >
+                  <span>{{ showAllExif ? '▼' : '▶' }}</span>
+                  <span class="ml-1">Show all {{ getExifFieldCount() }} EXIF fields</span>
+                </button>
+                <div *ngIf="showAllExif" class="mt-3 p-3 bg-white rounded border max-h-64 overflow-y-auto">
+                  <div *ngFor="let field of getExifFields()" class="text-xs py-1 border-b last:border-b-0">
+                    <span class="font-mono text-gray-600">{{ field.key }}:</span>
+                    <span class="ml-2 text-gray-800">{{ field.value }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Metadata Warnings -->
+              <div *ngIf="results.metadata_analysis?.flags?.length > 0" class="p-3 bg-red-50 rounded border border-red-200">
+                <p class="text-xs font-semibold text-red-700 mb-2">⚠️ Metadata Warnings</p>
+                <ul class="text-sm space-y-1">
+                  <li *ngFor="let flag of results.metadata_analysis.flags" class="text-red-600">• {{ flag }}</li>
+                </ul>
+              </div>
+            </div>
+            <div *ngIf="!results.metadata_analysis?.has_metadata" class="bg-red-50 rounded-lg p-4 border border-red-200">
+              <p class="text-sm text-red-700">⚠️ No EXIF metadata found - possibly stripped (suspicious)</p>
+            </div>
+          </div>
+
+          <!-- ELA (Error Level Analysis) -->
+          <div class="border-t pt-4">
+            <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
+              🔬 ELA - Error Level Analysis
+            </h4>
+            <div class="bg-gray-50 rounded-lg p-4">
+              <p class="text-sm text-gray-600 mb-3">
+                ELA detects digital alterations by analyzing JPEG compression inconsistencies.
+                Edited regions show different compression levels than the rest of the image.
+              </p>
+              <div *ngIf="results.forensicAnalysis?.errorLevelAnalysis" class="space-y-3">
+                <div class="grid grid-cols-2 gap-4">
+                  <div class="p-3 bg-white rounded border">
+                    <p class="text-xs text-gray-600">Suspicious Regions</p>
+                    <p class="text-2xl font-bold" [class.text-red-600]="results.forensicAnalysis.errorLevelAnalysis.suspicious_regions?.length > 0">
+                      {{ results.forensicAnalysis.errorLevelAnalysis.suspicious_regions?.length || 0 }}
+                    </p>
+                  </div>
+                  <div class="p-3 bg-white rounded border">
+                    <p class="text-xs text-gray-600">Confidence Level</p>
+                    <p class="text-2xl font-bold text-gray-800">
+                      {{ results.forensicAnalysis.errorLevelAnalysis.confidence || 0 }}%
+                    </p>
+                  </div>
+                </div>
+
+                <!-- Suspicious Regions Details -->
+                <div *ngIf="results.forensicAnalysis.errorLevelAnalysis.suspicious_regions?.length > 0" class="mt-3">
+                  <p class="text-xs font-semibold text-gray-700 mb-2">Detected Regions:</p>
+                  <div *ngFor="let region of results.forensicAnalysis.errorLevelAnalysis.suspicious_regions; let i = index" 
+                       class="p-2 bg-white rounded border mb-2">
+                    <div class="flex justify-between items-start">
+                      <div class="text-xs">
+                        <p class="font-semibold">Region #{{ i + 1 }}</p>
+                        <p class="text-gray-600">
+                          Position: ({{ region.coordinates?.x }}, {{ region.coordinates?.y }})
+                          Size: {{ region.coordinates?.width }}x{{ region.coordinates?.height }}px
+                        </p>
+                      </div>
+                      <span 
+                        class="px-2 py-1 rounded text-xs font-semibold"
+                        [class.bg-red-100]="region.severity === 'HIGH'"
+                        [class.text-red-700]="region.severity === 'HIGH'"
+                        [class.bg-yellow-100]="region.severity === 'MEDIUM'"
+                        [class.text-yellow-700]="region.severity === 'MEDIUM'"
+                      >
+                        {{ region.severity }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Clone Detection -->
+          <div class="border-t pt-4" *ngIf="results.forensicAnalysis?.cloneDetection">
+            <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
+              👯 Clone Detection
+            </h4>
+            <div class="bg-gray-50 rounded-lg p-4">
+              <p class="text-sm text-gray-600 mb-3">
+                Detects copy-pasted regions (e.g., duplicated signatures or amounts).
+              </p>
+              <div class="p-3 bg-white rounded border">
+                <p class="text-sm">
+                  <span class="font-medium">Status:</span>
+                  <span [class.text-red-600]="results.forensicAnalysis.cloneDetection.duplicates_found"
+                        [class.text-green-600]="!results.forensicAnalysis.cloneDetection.duplicates_found">
+                    {{ results.forensicAnalysis.cloneDetection.duplicates_found ? '⚠️ Duplicates Found' : '✓ No Duplicates' }}
+                  </span>
+                </p>
+                <p class="text-xs text-gray-600 mt-1">
+                  Duplicate Regions: {{ results.forensicAnalysis.cloneDetection.duplicate_count || 0 }}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Edge Analysis -->
+          <div class="border-t pt-4" *ngIf="results.forensicAnalysis?.edgeAnalysis">
+            <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
+              📐 Edge Analysis
+            </h4>
+            <div class="bg-gray-50 rounded-lg p-4">
+              <p class="text-sm text-gray-600 mb-3">
+                Analyzes edges and boundaries for suspicious straight lines or cut-and-paste artifacts.
+              </p>
+              <div class="p-3 bg-white rounded border">
+                <p class="text-sm">
+                  <span class="font-medium">Irregular Edges Found:</span>
+                  <span [class.text-red-600]="results.forensicAnalysis.edgeAnalysis.irregular_edges?.length > 5"
+                        [class.text-yellow-600]="results.forensicAnalysis.edgeAnalysis.irregular_edges?.length > 0 && results.forensicAnalysis.edgeAnalysis.irregular_edges?.length <= 5">
+                    {{ results.forensicAnalysis.edgeAnalysis.irregular_edges?.length || 0 }}
+                  </span>
+                </p>
+                <p class="text-xs text-gray-600 mt-1" *ngIf="results.forensicAnalysis.edgeAnalysis.irregular_edges?.length > 5">
+                  ⚠️ High number of irregular edges detected - possible tampering
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Raw JSON Data -->
+          <div class="border-t pt-4">
+            <button 
+              (click)="showRawJson = !showRawJson"
+              class="text-sm text-blue-600 hover:text-blue-700 flex items-center"
+            >
+              <span>{{ showRawJson ? '▼' : '▶' }}</span>
+              <span class="ml-1">Show raw JSON data</span>
+            </button>
+            <div *ngIf="showRawJson" class="mt-3 bg-gray-900 rounded-lg p-4 overflow-x-auto">
+              <pre class="text-xs text-green-400 font-mono">{{ results | json }}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   `,
   styles: [],
 })
 export class ResultsComponent {
-  private apiService = inject(ApiService);
+  private readonly apiService = inject(ApiService);
 
   @Input() results!: AnalysisResults;
   @Input() jobId!: string;
   @Output() newAnalysis = new EventEmitter<void>();
 
+  showTechnicalDetails = false;
+  showAllExif = false;
+  showRawJson = false;
+
   getImageUrl(type: 'original' | 'annotated'): string {
     return this.apiService.getImageUrl(this.jobId, type);
+  }
+
+  getExifFieldCount(): number {
+    return this.results.metadata_analysis?.exif_field_count || 0;
+  }
+
+  getExifFields(): Array<{key: string, value: string}> {
+    const exifData = this.results.metadata_analysis?.all_exif_data || {};
+    return Object.entries(exifData).map(([key, value]) => ({ 
+      key, 
+      value: typeof value === 'object' ? JSON.stringify(value) : String(value)
+    }));
   }
 
   onImageError(event: any) {

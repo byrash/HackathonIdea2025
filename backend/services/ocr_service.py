@@ -72,37 +72,52 @@ class OCRService:
                 config=custom_config
             )
             
+            # Removed verbose logging for production
+            
             return self.extracted_text
             
         except Exception as e:
-            print(f"Error extracting text: {str(e)}")
+            print(f"❌ Error extracting text: {str(e)}")
             return ""
     
     def extract_check_number(self) -> Optional[str]:
-        """Extract check number (usually 3-4 digits in top right)."""
+        """Extract check number (usually 4-6 digits in top right)."""
         if not self.extracted_text:
             self.extract_text()
         
-        # Pattern for check number (typically 3-4 digits)
+        # Pattern for check number (typically 4-6 digits)
+        # Prioritize patterns with "CHECK" or "#" label
         patterns = [
-            r'CHECK\s*#?\s*(\d{3,4})',
-            r'NO\.?\s*(\d{3,4})',
-            r'CHECK\s+NUMBER\s*:?\s*(\d{3,4})',
-            r'^(\d{3,4})$'
+            r'CHECK\s*#:?\s*(\d{4,6})',  # Check #: 804135
+            r'CHECK\s+NUMBER\s*:?\s*(\d{4,6})',  # Check Number: 804135
+            r'#\s*:?\s*(\d{4,6})',  # #: 804135 or # 804135
+            r'NO\.?\s*:?\s*(\d{4,6})',  # No. 804135 or No: 804135
         ]
         
+        candidates = []
         for pattern in patterns:
             match = re.search(pattern, self.extracted_text, re.IGNORECASE | re.MULTILINE)
             if match:
-                return match.group(1)
+                check_num = match.group(1)
+                candidates.append((check_num, 'pattern'))
         
-        # Try to find any 3-4 digit number in first few lines
-        lines = self.extracted_text.split('\n')[:5]
-        for line in lines:
-            match = re.search(r'\b(\d{3,4})\b', line)
-            if match:
-                return match.group(1)
+        # Fallback: Try to find 4-6 digit number in lines that mention "Check"
+        for line in self.extracted_text.split('\n'):
+            if 'check' in line.lower() or '#' in line:
+                match = re.search(r'\b(\d{4,6})\b', line)
+                if match:
+                    check_num = match.group(1)
+                    # Exclude if it looks like a zip code (27XXX or 275XX)
+                    if not check_num.startswith('27'):
+                        candidates.append((check_num, 'line'))
         
+        # Return first candidate (most reliable)
+        if candidates:
+            final_check_num = candidates[0][0]
+            print(f"✅ Check number found: {final_check_num}")
+            return final_check_num
+        
+        print(f"⚠️  Check number not found")
         return None
     
     def extract_date(self) -> Optional[str]:
@@ -121,8 +136,11 @@ class OCRService:
         for pattern in patterns:
             match = re.search(pattern, self.extracted_text, re.IGNORECASE)
             if match:
-                return match.group(1)
+                date = match.group(1)
+                print(f"✅ Date found: {date}")
+                return date
         
+        print(f"⚠️  Date not found")
         return None
     
     def extract_payee(self) -> Optional[str]:
@@ -130,11 +148,14 @@ class OCRService:
         if not self.extracted_text:
             self.extract_text()
         
+        # Extract payee from check
+        
         # Look for "Pay to the order of" pattern
         patterns = [
             r'PAY\s+TO\s+THE\s+ORDER\s+OF\s*:?\s*([A-Z][A-Za-z\s\.]+)',
             r'PAY\s+TO\s*:?\s*([A-Z][A-Za-z\s\.]+)',
-            r'PAYEE\s*:?\s*([A-Z][A-Za-z\s\.]+)'
+            r'PAYEE\s*:?\s*([A-Z][A-Za-z\s\.]+)',
+            r'TO\s+THE\s+(\w+)',  # Fallback: "TO THE BYRAPANENT"
         ]
         
         for pattern in patterns:
@@ -144,37 +165,134 @@ class OCRService:
                 # Clean up payee name
                 payee = re.sub(r'\s+', ' ', payee)
                 if len(payee) > 3 and len(payee) < 100:
+                    print(f"✅ Payee found: {payee}")
                     return payee
         
+        # Try to extract from first line (often contains payee)
+        lines = self.extracted_text.split('\n')
+        if lines and len(lines[0]) > 3:
+            first_line = lines[0].strip()
+            if len(first_line) < 100:
+                print(f"✅ Payee found (first line): {first_line}")
+                return first_line
+        
+        print(f"⚠️  Payee not found")
         return None
     
     def extract_amount_numeric(self) -> Optional[float]:
-        """Extract numeric amount from check."""
+        """Extract numeric amount from check with enhanced OCR on amount box."""
         if not self.extracted_text:
             self.extract_text()
         
+        # Try to extract amount from specific region (top-right corner amount box)
+        amount_from_region = self._extract_amount_from_region()
+        if amount_from_region:
+            return amount_from_region
+        
+        # Fallback to full text extraction
         # Pattern for amount (dollar sign followed by numbers)
         patterns = [
-            r'\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'\$\s*(\d{1,3}(?:,\d{3})*\.\d{2})',  # $1,234.56 (with cents)
+            r'\$\s*(\d+\.\d{2})',  # $123.45
+            r'\$\s*(\d{1,3}(?:,\d{3})*)',  # $1,234 (no cents)
             r'AMOUNT\s*:?\s*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
-            r'\$\s*(\d+\.\d{2})'
+            # Handle OCR errors: o"" -> $, _ -> .
+            r'[o\*\"\'][\"\'\*]*\s*(\d+)\s*[_\-\.]\s*(\d{2})',  # o""37_ 86 -> 37.86
+            r'(\d+)\s*[_\-\.]\s*(\d{2})',  # 37_ 86 or 37. 86
         ]
         
         amounts = []
         for pattern in patterns:
             matches = re.finditer(pattern, self.extracted_text, re.IGNORECASE)
             for match in matches:
-                amount_str = match.group(1).replace(',', '')
                 try:
+                    # Handle two-group matches (number and cents separately)
+                    if len(match.groups()) == 2 and match.group(2):
+                        amount_str = f"{match.group(1)}.{match.group(2)}"
+                    else:
+                        amount_str = match.group(1).replace(',', '')
+                    
                     amount = float(amount_str)
-                    if 0 < amount < 1000000:  # Reasonable check amount
+                    if 0.01 < amount < 1000000:  # Reasonable check amount
                         amounts.append(amount)
-                except ValueError:
+                except (ValueError, AttributeError):
                     continue
         
-        # Return the most likely amount (usually the largest)
+        # Return the most likely amount
+        # Strategy: Use the most common amount (appears multiple times) or smallest if tie
         if amounts:
-            return max(amounts)
+            from collections import Counter
+            amount_counts = Counter(amounts)
+            
+            # If one amount appears more than others, use it
+            most_common = amount_counts.most_common(2)
+            if len(most_common) > 1 and most_common[0][1] > most_common[1][1]:
+                final_amount = most_common[0][0]
+                print(f"✅ Amount found (full-text, most common): ${final_amount:.2f}")
+            else:
+                # Otherwise use the smallest (safer for fraud detection)
+                final_amount = min(amounts)
+                print(f"✅ Amount found (full-text, smallest): ${final_amount:.2f}")
+            
+            return final_amount
+        
+        print(f"⚠️  Amount not found")
+        return None
+    
+    def _extract_amount_from_region(self) -> Optional[float]:
+        """Extract amount from the typical amount box region (top-right)."""
+        try:
+            if self.image is None:
+                self.load_image()
+            
+            h, w = self.image.shape[:2]
+            
+            # Amount box is typically in top-right corner
+            # Try region: right 30%, top 25%
+            x_start = int(w * 0.7)
+            y_start = int(h * 0.05)
+            y_end = int(h * 0.30)
+            
+            amount_region = self.gray_image[y_start:y_end, x_start:]
+            
+            # Preprocess amount region
+            _, thresh = cv2.threshold(amount_region, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # Try multiple OCR configs for amount
+            configs = [
+                r'--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789.$,*',  # Include asterisks
+                r'--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789.$,',
+                r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.$,*',
+            ]
+            
+            all_amounts = []
+            for config in configs:
+                try:
+                    amount_text = pytesseract.image_to_string(thresh, config=config).strip()
+                    # OCR amount region
+                    
+                    # Remove asterisks and extract amount
+                    cleaned = amount_text.replace('*', '').replace('$', '').strip()
+                    
+                    # Find last occurrence of digits with decimal (usually the actual amount)
+                    matches = re.findall(r'(\d{1,3}(?:,?\d{3})*\.?\d{0,2})', cleaned)
+                    for match in matches:
+                        amount_str = match.replace(',', '')
+                        amount = float(amount_str)
+                    if 0.01 < amount < 10000:  # Reasonable check amount
+                        all_amounts.append(amount)
+                except Exception:
+                    continue
+            
+            if all_amounts:
+                # Return smallest reasonable amount (asterisks often make OCR read larger numbers)
+                final_amount = min(all_amounts)
+                print(f"✅ Amount extracted from region: ${final_amount:.2f}")
+                return final_amount
+            
+            print(f"⚠️  Amount region extraction: no valid amount found")
+        except Exception as e:
+            print(f"❌ Amount region extraction failed: {e}")
         
         return None
     
@@ -202,6 +320,8 @@ class OCRService:
         """
         Extract MICR (Magnetic Ink Character Recognition) line.
         Format: ⑆routing⑆ account⑆ check_number
+        
+        MICR uses special E-13B font at the bottom of checks.
         """
         result = {
             "full_micr": None,
@@ -210,12 +330,18 @@ class OCRService:
             "check_number_micr": None
         }
         
+        # Try region-based extraction first (bottom 15% of check)
+        micr_from_region = self._extract_micr_from_region()
+        if micr_from_region["routing_number"]:
+            return micr_from_region
+        
+        # Fallback to full text extraction
         if not self.extracted_text:
             self.extract_text()
         
         # MICR typically contains routing number (9 digits), account number, and check number
         # Look for pattern with multiple digit groups
-        micr_pattern = r'[⑆⑈]?\s*(\d{9})\s*[⑆⑈]\s*(\d{4,17})\s*[⑆⑈]\s*(\d{3,4})'
+        micr_pattern = r'[⑆⑈]?\s*(\d{9})\s*[⑆⑈]?\s*(\d{4,17})\s*[⑆⑈]?\s*(\d{3,4})'
         match = re.search(micr_pattern, self.extracted_text)
         
         if match:
@@ -228,6 +354,151 @@ class OCRService:
             routing_match = re.search(r'\b(\d{9})\b', self.extracted_text)
             if routing_match:
                 result["routing_number"] = routing_match.group(1)
+        
+        return result
+    
+    def _extract_micr_from_region(self) -> Dict:
+        """
+        Extract MICR line from bottom region of check with enhanced preprocessing.
+        Saves intermediate images for debugging.
+        """
+        result = {
+            "full_micr": None,
+            "routing_number": None,
+            "account_number": None,
+            "check_number_micr": None
+        }
+        
+        try:
+            if self.image is None:
+                self.load_image()
+            
+            h, w = self.image.shape[:2]
+            
+            # Extract MICR from bottom region
+            
+            # MICR line is at the bottom of the check (bottom 8-12%)
+            # Be more precise with the crop
+            y_start = int(h * 0.88)
+            micr_region = self.image[y_start:, :]  # Use color image first
+            micr_gray = self.gray_image[y_start:, :]
+            
+            # Save MICR region for debugging
+            micr_debug_path = self.image_path.replace('_original', '_micr_region')
+            cv2.imwrite(micr_debug_path, micr_region)
+            
+            # Enhanced preprocessing approaches for MICR
+            preprocessed_images = []
+            
+            # 1. Standard Otsu threshold
+            _, thresh1 = cv2.threshold(micr_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            preprocessed_images.append(('otsu', thresh1))
+            
+            # 2. Inverted Otsu (MICR is magnetic ink, often appears different)
+            _, thresh2 = cv2.threshold(micr_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            preprocessed_images.append(('otsu_inv', thresh2))
+            
+            # 3. Adaptive threshold (handles varying lighting)
+            thresh3 = cv2.adaptiveThreshold(
+                micr_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY, 11, 2
+            )
+            preprocessed_images.append(('adaptive', thresh3))
+            
+            # 4. High contrast with morphology
+            _, thresh4 = cv2.threshold(micr_gray, 127, 255, cv2.THRESH_BINARY)
+            kernel = np.ones((2, 2), np.uint8)
+            thresh4 = cv2.morphologyEx(thresh4, cv2.MORPH_CLOSE, kernel)
+            preprocessed_images.append(('morph', thresh4))
+            
+            # 5. Denoise + threshold
+            denoised = cv2.fastNlMeansDenoising(micr_gray, h=10)
+            _, thresh5 = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            preprocessed_images.append(('denoise', thresh5))
+            
+            # 6. Resize 2x for better OCR (MICR characters are small)
+            micr_2x = cv2.resize(micr_gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+            _, thresh6 = cv2.threshold(micr_2x, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            preprocessed_images.append(('2x_scale', thresh6))
+            
+            # Try multiple OCR configurations
+            configs = [
+                r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789',  # Uniform block
+                r'--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789',  # Single line
+                r'--oem 3 --psm 13 -c tessedit_char_whitelist=0123456789', # Raw line
+                r'--oem 1 --psm 7 -c tessedit_char_whitelist=0123456789',  # LSTM only
+            ]
+            
+            all_texts = []
+            
+            for method_name, thresh in preprocessed_images:
+                for config in configs:
+                    try:
+                        text = pytesseract.image_to_string(thresh, config=config).strip()
+                        if text and len(text) > 5:  # Only consider substantial extractions
+                            all_texts.append((method_name, text))
+                    except Exception:
+                        continue
+            
+            # Try to extract routing and account numbers from all texts
+            for method_name, text in all_texts:
+                # Clean text - keep only digits
+                cleaned = re.sub(r'[^\d]', '', text)
+                
+                # MICR format: ⑆routing⑆ account⑆ check
+                # But OCR reads it as continuous digits without delimiters
+                # Try different parsing strategies:
+                
+                # Strategy 1: Look for 9-digit routing at start or after a few digits
+                for offset in [0, 1, 2, 3, 4]:
+                    if len(cleaned) > offset + 9:
+                        potential_routing = cleaned[offset:offset+9]
+                        if self.validate_routing_number(potential_routing):
+                            result["routing_number"] = potential_routing
+                            print(f"✅ Routing number found [{method_name}] at offset {offset}: {potential_routing}")
+                            
+                            # Account number comes after routing
+                            remaining = cleaned[offset+9:]
+                            if len(remaining) >= 4:
+                                # Try to find account (next 4-17 digits)
+                                # Account usually ends before check number
+                                for acc_len in range(min(17, len(remaining)), 3, -1):
+                                    potential_account = remaining[:acc_len]
+                                    if len(potential_account) >= 4:
+                                        result["account_number"] = potential_account
+                                        print(f"✅ Account number found: ****{result['account_number'][-4:]}")
+                                        break
+                            
+                            break
+                    
+                    if result["routing_number"]:
+                        break
+                
+                # Strategy 2: Scan for any valid 9-digit routing in the string
+                if not result["routing_number"]:
+                    for i in range(len(cleaned) - 8):
+                        potential_routing = cleaned[i:i+9]
+                        if self.validate_routing_number(potential_routing):
+                            result["routing_number"] = potential_routing
+                            print(f"✅ Routing number found [{method_name}] at position {i}: {potential_routing}")
+                            
+                            # Try to get account after routing
+                            remaining = cleaned[i+9:]
+                            if len(remaining) >= 4:
+                                account_candidate = remaining[:12]  # Try 12 digits
+                                if len(account_candidate) >= 4:
+                                    result["account_number"] = account_candidate
+                                    print(f"✅ Account number found: ****{result['account_number'][-4:]}")
+                            break
+                
+                if result["routing_number"]:
+                    break
+            
+            if not result["routing_number"]:
+                print(f"⚠️  MICR: No valid routing number found (E-13B font limitation)")
+            
+        except Exception as e:
+            print(f"❌ MICR extraction failed: {e}")
         
         return result
     
@@ -328,17 +599,6 @@ class OCRService:
             # Simple check: convert written to number and compare
             # This is a simplified version; full implementation would need a complete number-to-text parser
             written_lower = written.lower()
-            
-            # Extract numeric parts from written amount
-            number_words = {
-                'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4,
-                'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
-                'ten': 10, 'eleven': 11, 'twelve': 12, 'thirteen': 13,
-                'fourteen': 14, 'fifteen': 15, 'sixteen': 16, 'seventeen': 17,
-                'eighteen': 18, 'nineteen': 19, 'twenty': 20, 'thirty': 30,
-                'forty': 40, 'fifty': 50, 'sixty': 60, 'seventy': 70,
-                'eighty': 80, 'ninety': 90, 'hundred': 100, 'thousand': 1000
-            }
             
             # For now, just check if the amounts are reasonably consistent
             # by looking for key numbers in the written amount

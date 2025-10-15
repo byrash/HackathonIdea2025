@@ -203,7 +203,6 @@ export class UploadComponent {
     this.eventSource = this.apiService.listenToProgress(
       jobId,
       (update: ProgressUpdate) => {
-        console.log('Progress update:', update);
         this.ngZone.run(() => {
           this.progress = update.currentPercentage;
           this.currentStage = update.currentStage;
@@ -211,7 +210,6 @@ export class UploadComponent {
 
           // Check if completed
           if (update.status === 'COMPLETED' && update.currentPercentage === 100) {
-            console.log('Analysis completed, fetching results...');
             setTimeout(() => {
               this.fetchResults(jobId);
             }, 500);
@@ -220,7 +218,6 @@ export class UploadComponent {
       },
       () => {
         // Analysis complete, fetch results
-        console.log('SSE stream closed, fetching results...');
         this.ngZone.run(() => {
           this.fetchResults(jobId);
         });
@@ -238,8 +235,6 @@ export class UploadComponent {
   fetchResults(jobId: string) {
     this.apiService.getResults(jobId).subscribe({
       next: (results) => {
-        console.log('Results received:', results);
-
         this.ngZone.run(() => {
           // Check if analysis is actually complete
           if (results.status === 'COMPLETED') {
@@ -251,11 +246,8 @@ export class UploadComponent {
               this.eventSource.close();
               this.eventSource = null;
             }
-
-            console.log('UI should now show results!');
           } else {
             // Still processing, wait a bit and try again
-            console.log('Analysis still processing, waiting...');
             setTimeout(() => this.fetchResults(jobId), 1000);
           }
         });

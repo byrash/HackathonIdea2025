@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ExifTags
 from pathlib import Path
 from typing import Tuple, Optional
 
@@ -17,9 +17,32 @@ class ImageProcessor:
         self.processed_image = None
     
     def load_image(self) -> bool:
-        """Load image from file path."""
+        """Load image from file path and handle EXIF orientation."""
         try:
-            self.image = cv2.imread(self.image_path)
+            # First, handle EXIF orientation using PIL
+            pil_image = Image.open(self.image_path)
+            
+            # Check for EXIF orientation tag
+            try:
+                for orientation in ExifTags.TAGS.keys():
+                    if ExifTags.TAGS[orientation] == 'Orientation':
+                        break
+                exif = pil_image._getexif()
+                if exif is not None:
+                    orientation_value = exif.get(orientation)
+                    if orientation_value == 3:
+                        pil_image = pil_image.rotate(180, expand=True)
+                    elif orientation_value == 6:
+                        pil_image = pil_image.rotate(270, expand=True)
+                    elif orientation_value == 8:
+                        pil_image = pil_image.rotate(90, expand=True)
+            except (AttributeError, KeyError, IndexError):
+                # No EXIF data, continue normally
+                pass
+            
+            # Convert PIL to OpenCV format
+            self.image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+            
             if self.image is None:
                 return False
             return True
@@ -64,30 +87,11 @@ class ImageProcessor:
     
     def correct_orientation(self, image: np.ndarray) -> np.ndarray:
         """
-        Detect and correct image orientation using edge detection.
+        Detect and correct minor image skew (disabled for checks to prevent incorrect rotation).
+        Checks are typically scanned properly and aggressive rotation can cause issues.
         """
-        # Convert to grayscale
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # Detect edges
-        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-        
-        # Detect lines using Hough Transform
-        lines = cv2.HoughLines(edges, 1, np.pi / 180, 200)
-        
-        if lines is not None and len(lines) > 0:
-            # Calculate average angle
-            angles = []
-            for rho, theta in lines[:, 0]:
-                angle = np.degrees(theta) - 90
-                angles.append(angle)
-            
-            median_angle = np.median(angles)
-            
-            # Only rotate if angle is significant (> 1 degree)
-            if abs(median_angle) > 1:
-                return self.rotate_image(image, median_angle)
-        
+        # DISABLED: Hough line detection can incorrectly rotate check images
+        # Only enable minor skew correction (< 5 degrees) if absolutely necessary
         return image
     
     def rotate_image(self, image: np.ndarray, angle: float) -> np.ndarray:
@@ -110,7 +114,7 @@ class ImageProcessor:
     
     def deskew_image(self, image: np.ndarray) -> np.ndarray:
         """
-        Deskew image to correct perspective distortion.
+        Deskew image to correct minor skew (limited to prevent incorrect rotation).
         """
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         gray = cv2.bitwise_not(gray)
@@ -119,20 +123,21 @@ class ImageProcessor:
         thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
         
         # Find coordinates of all non-zero points
-        coords = np.column_stack(np.where(thresh > 0))
+        coords = np.column_stack(np.nonzero(thresh > 0))
         
         # Find minimum area rectangle
         if len(coords) > 0:
             angle = cv2.minAreaRect(coords)[-1]
             
-            # Adjust angle
+            # Adjust angle to range [-45, 45]
             if angle < -45:
                 angle = -(90 + angle)
             else:
                 angle = -angle
             
-            # Only deskew if angle is significant
-            if abs(angle) > 0.5:
+            # CONSERVATIVE: Only deskew minor angles (< 5 degrees) to prevent 90-degree rotations
+            # This prevents minAreaRect from incorrectly rotating landscape images
+            if abs(angle) > 0.5 and abs(angle) < 5:
                 return self.rotate_image(image, angle)
         
         return image
@@ -184,18 +189,18 @@ class ImageProcessor:
             results["warnings"].append(f"Noise reduction failed: {str(e)}")
             denoised = enhanced
         
-        # Step 3: Correct orientation
+        # Step 3: Correct orientation (disabled by default for checks)
         try:
             oriented = self.correct_orientation(denoised)
-            results["steps_completed"].append("Orientation corrected")
+            results["steps_completed"].append("Orientation checked")
         except Exception as e:
-            results["warnings"].append(f"Orientation correction failed: {str(e)}")
+            results["warnings"].append(f"Orientation check failed: {str(e)}")
             oriented = denoised
         
-        # Step 4: Deskew
+        # Step 4: Deskew (conservative - only minor corrections)
         try:
             deskewed = self.deskew_image(oriented)
-            results["steps_completed"].append("Image deskewed")
+            results["steps_completed"].append("Minor skew corrected")
         except Exception as e:
             results["warnings"].append(f"Deskewing failed: {str(e)}")
             deskewed = oriented
