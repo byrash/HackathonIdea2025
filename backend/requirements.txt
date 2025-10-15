@@ -16,9 +16,11 @@ easyocr==1.7.1
 exifread==3.0.0
 python-magic==0.4.27
 
-# Machine Learning
+# Machine Learning (Pure Python - Portable)
 scikit-learn==1.3.2
-xgboost==2.1.4
+numpy==1.26.2
+scipy==1.13.1
+# Note: Uses sklearn GradientBoostingClassifier (no XGBoost native lib issues)
 
 # Utilities
 aiofiles==23.2.1

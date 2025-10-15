@@ -99,10 +99,10 @@ templates:
 	cd backend && ./.venv/bin/python generate_sample_templates.py
 	@echo "\033[1;32m✓ Templates generated!\033[0m"
 
-# Generate ML model
+# Generate ML model (Portable - no XGBoost dependencies)
 ml-model:
-	@echo "\033[1;34m🤖 Generating ML fraud detection model...\033[0m"
-	cd backend && ./.venv/bin/python setup_ml_model.py --option simple
+	@echo "\033[1;34m🤖 Generating portable ML fraud detection model...\033[0m"
+	cd backend && ./.venv/bin/python setup_portable_model.py
 	@echo "\033[1;32m✓ ML model generated!\033[0m"
 
 # Clean up generated files

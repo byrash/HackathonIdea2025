@@ -20,11 +20,14 @@ class MLPredictor:
     def __init__(self, model_path: Optional[str] = None):
         # Auto-detect model if not specified
         if model_path is None:
-            # Try XGBoost model first, then RF for backward compatibility
+            # Try portable model first (GradientBoosting - pure Python, no native deps)
+            portable_model = Path("./ml-models/fraud_detection_model.pkl")
             xgb_model = Path("./ml-models/fraud_detection_xgb.pkl")
             rf_model = Path("./ml-models/fraud_detection_rf.pkl")
             
-            if xgb_model.exists():
+            if portable_model.exists():
+                model_path = str(portable_model)
+            elif xgb_model.exists():
                 model_path = str(xgb_model)
             elif rf_model.exists():
                 model_path = str(rf_model)
