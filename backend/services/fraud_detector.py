@@ -139,22 +139,24 @@ class FraudDetector:
         
         return result
     
-    async def stage2_preprocess(self) -> Dict:
+    async def stage2_preprocess(self, check_bounds: dict = None) -> Dict:
         """
         Stage 2: Preprocessing (10-20%)
+        Lightweight enhancement for better OCR (no cropping).
         """
-        self.update_progress(2, 15, "Enhancing image quality...")
-        await asyncio.sleep(0.5)
+        self.update_progress(2, 15, "Enhancing image for OCR...")
+        await asyncio.sleep(0.2)
         
         try:
             processor = ImageProcessor(self.image_path)
-            results = processor.preprocess()
+            # Fast preprocessing: enhance only, no cropping
+            results = processor.preprocess(check_bounds=None)
             
-            # Save processed image
+            # Save processed (enhanced) image for OCR
             processed_path = str(self.uploads_dir / f"{self.job_id}_processed.jpg")
             processor.save_processed_image(processed_path)
             
-            self.update_progress(2, 20, "✓ Image preprocessing complete")
+            self.update_progress(2, 20, "✓ Image enhanced for OCR")
             self.add_stage_completion(2, "Preprocessing")
             
             return results
@@ -167,11 +169,13 @@ class FraudDetector:
     async def stage3_metadata_analysis(self) -> Dict:
         """
         Stage 3: Metadata Analysis (20-30%)
+        IMPORTANT: Uses ORIGINAL image to preserve EXIF data
         """
         self.update_progress(3, 25, "Extracting EXIF metadata...")
         await asyncio.sleep(0.3)
         
         try:
+            # MUST use original image - processed image loses EXIF metadata
             analyzer = MetadataAnalyzer(self.image_path)
             
             self.update_progress(3, 28, "Checking for manipulation history...")
@@ -192,12 +196,13 @@ class FraudDetector:
     async def stage4_ocr_extraction(self) -> Dict:
         """
         Stage 4: OCR & Text Extraction (30-50%)
+        IMPORTANT: Uses PROCESSED image for better OCR accuracy
         """
         self.update_progress(4, 35, "Running OCR engine...")
         await asyncio.sleep(0.5)
         
         try:
-            # Use processed image if available
+            # Use PROCESSED image for better OCR (enhanced but not cropped)
             processed_path = self.uploads_dir / f"{self.job_id}_processed.jpg"
             ocr_image_path = str(processed_path) if processed_path.exists() else self.image_path
             
@@ -251,11 +256,13 @@ class FraudDetector:
     async def stage6_forensic_analysis(self) -> Dict:
         """
         Stage 6: Forensic Analysis (60-75%)
+        CRITICAL: Uses ORIGINAL image - processed image would hide tampering!
         """
         self.update_progress(6, 62, "Running error level analysis...")
         await asyncio.sleep(0.5)
         
         try:
+            # MUST use original image - ELA/clone detection need unmodified pixels
             analyzer = ForensicAnalyzer(self.image_path)
             
             self.update_progress(6, 67, "Detecting cloned regions...")
@@ -279,11 +286,13 @@ class FraudDetector:
     async def stage7_security_features(self) -> Dict:
         """
         Stage 7: Security Features Check (75-90%)
+        IMPORTANT: Uses ORIGINAL image for authentic template matching
         """
         self.update_progress(7, 78, "Checking for watermarks...")
         await asyncio.sleep(0.3)
         
         try:
+            # Use original image - watermarks/security features should match original
             matcher = TemplateMatcher(self.image_path, "./templates")
             
             self.update_progress(7, 82, "Matching against bank templates...")

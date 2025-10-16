@@ -118,5 +118,5 @@ export class ProgressComponent {
   @Input() currentStage = 0;
   @Input() statusMessage = '';
 
-  stages = ['Validation', 'Preprocessing', 'Metadata', 'OCR', 'Validation', 'Forensics', 'Security', 'ML Analysis'];
+  stages = ['Validation', 'Preprocessing', 'Metadata', 'OCR', 'Forensics', 'Security', 'Templates', 'ML Analysis'];
 }

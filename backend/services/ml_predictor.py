@@ -79,10 +79,11 @@ class MLPredictor:
         """
         Extract feature vector from analysis results for ML prediction.
         
-        Returns 12 features:
+        Returns 14 features (UPDATED):
         [metadata_risk, forensic_risk, ocr_risk, security_risk,
          ela_regions, irregular_edges, template_matched, watermark,
-         exif_count, amount_mismatch, date_invalid, clone_count]
+         exif_count, amount_mismatch, date_invalid, clone_count,
+         has_gps, is_usa_location]
         """
         metadata = analysis_results.get("metadata", {})
         forensics = analysis_results.get("forensics", {})
@@ -112,7 +113,18 @@ class MLPredictor:
         
         clone_count = forensics.get("cloneDetection", {}).get("duplicate_count", 0)
         
-        # Return as numpy array
+        # NEW: GPS location features
+        gps_location = metadata.get("gps_location", {})
+        has_gps = 1 if gps_location.get("gps_found", False) else 0
+        
+        # Check if USA location
+        is_usa = 0
+        if has_gps:
+            country = gps_location.get("country", "").lower()
+            if "united states" in country or country in ["usa", "us"]:
+                is_usa = 1
+        
+        # Return as numpy array with all 14 features
         features = np.array([[
             metadata_risk,
             forensic_risk,
@@ -125,7 +137,9 @@ class MLPredictor:
             exif_count,
             amount_mismatch,
             date_invalid,
-            clone_count
+            clone_count,
+            has_gps,
+            is_usa
         ]])
         
         return features
@@ -223,7 +237,7 @@ class MLPredictor:
         }
     
     def _rule_based_scoring(self, analysis_results: Dict) -> Dict:
-        """Fallback rule-based scoring (original method)."""
+        """Fallback rule-based scoring (updated to be lenient on edges and consider GPS)."""
         score_components = {
             "metadata_risk": 0,
             "forensic_risk": 0,
@@ -232,26 +246,43 @@ class MLPredictor:
         }
         
         # 1. Metadata Analysis Risk (Weight: 15%)
+        # Adjusted down if USA location detected
         if "metadata" in analysis_results:
             metadata = analysis_results["metadata"]
             metadata_risk = metadata.get("overall_risk_score", 0)
+            
+            # GPS-based adjustment
+            gps_location = metadata.get("gps_location", {})
+            if gps_location.get("gps_found"):
+                country = gps_location.get("country", "").lower()
+                if "united states" in country or country in ["usa", "us"]:
+                    metadata_risk = max(0, metadata_risk - 15)  # Reduce risk for USA checks
+            
             score_components["metadata_risk"] = metadata_risk * 0.15
         
-        # 2. Forensic Analysis Risk (Weight: 40%)
+        # 2. Forensic Analysis Risk (Weight: 30% - REDUCED from 40%)
+        # LENIENT on edges - photos naturally have irregular edges
         if "forensics" in analysis_results:
             forensics = analysis_results["forensics"]
             forensic_risk = forensics.get("overall_risk_score", 0)
-            score_components["forensic_risk"] = forensic_risk * 0.40
+            
+            # Reduce impact of edge analysis (photos have natural edge variations)
+            edge_count = len(forensics.get("edgeAnalysis", {}).get("irregular_edges", []))
+            if edge_count > 0:
+                # Reduce edge contribution to forensic risk
+                forensic_risk = max(0, forensic_risk - (edge_count * 5))  # Remove edge penalty
+            
+            score_components["forensic_risk"] = forensic_risk * 0.30  # Reduced weight
         
-        # 3. OCR Validation Risk (Weight: 25%)
+        # 3. OCR Validation Risk (Weight: 30% - INCREASED to compensate)
         if "ocr" in analysis_results:
             ocr_risk = self._calculate_ocr_risk(analysis_results["ocr"])
-            score_components["ocr_validation_risk"] = ocr_risk * 0.25
+            score_components["ocr_validation_risk"] = ocr_risk * 0.30
         
-        # 4. Security Features Risk (Weight: 20%)
+        # 4. Security Features Risk (Weight: 25% - INCREASED to compensate)
         if "security" in analysis_results:
             security_risk = self._calculate_security_risk(analysis_results["security"])
-            score_components["security_features_risk"] = security_risk * 0.20
+            score_components["security_features_risk"] = security_risk * 0.25
         
         # Calculate total fraud score
         total_score = sum(score_components.values())

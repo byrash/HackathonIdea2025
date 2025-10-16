@@ -24,4 +24,5 @@ scipy==1.13.1
 
 # Utilities
 aiofiles==23.2.1
+requests==2.31.0
 

@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import time
 
 
 class TemplateMatcher:
@@ -107,9 +108,10 @@ class TemplateMatcher:
         
         return analysis
     
-    def match_templates(self) -> Dict:
+    def match_templates(self, timeout_seconds: int = 10) -> Dict:
         """
         Match check image against known legitimate check templates.
+        Optimized with timeout to prevent hanging.
         """
         analysis = {
             "matched": False,
@@ -117,6 +119,8 @@ class TemplateMatcher:
             "confidence": 0,
             "matches": []
         }
+        
+        start_time = time.time()
         
         try:
             if self.image is None:
@@ -134,13 +138,24 @@ class TemplateMatcher:
                 analysis["warning"] = "No template files found"
                 return analysis
             
-            # Resize check image for consistent comparison
-            check_resized = cv2.resize(self.gray_image, (800, 400))
+            # Limit number of templates to check (performance)
+            max_templates = 10
+            if len(template_files) > max_templates:
+                print(f"⚠️  Limiting template matching to first {max_templates} templates")
+                template_files = template_files[:max_templates]
+            
+            # Resize check image for consistent comparison (smaller for speed)
+            check_resized = cv2.resize(self.gray_image, (600, 300))
             
             best_score = 0
             best_template = None
             
             for template_path in template_files:
+                # Check timeout
+                if time.time() - start_time > timeout_seconds:
+                    print(f"⚠️  Template matching timeout after {timeout_seconds}s")
+                    analysis["warning"] = "Template matching timed out"
+                    break
                 try:
                     # Load template
                     template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
@@ -148,40 +163,14 @@ class TemplateMatcher:
                         continue
                     
                     # Resize template to match check size
-                    template_resized = cv2.resize(template, (800, 400))
+                    template_resized = cv2.resize(template, (600, 300))
                     
-                    # Calculate structural similarity
-                    # Use normalized cross-correlation
+                    # OPTIMIZED: Use only template matching, skip SIFT/FLANN for speed
+                    # Template matching is much faster and sufficient for basic matching
                     result = cv2.matchTemplate(check_resized, template_resized, cv2.TM_CCOEFF_NORMED)
                     _, max_val, _, _ = cv2.minMaxLoc(result)
                     
-                    # Also use feature matching for better accuracy
-                    sift = cv2.SIFT_create()
-                    kp1, des1 = sift.detectAndCompute(check_resized, None)
-                    kp2, des2 = sift.detectAndCompute(template_resized, None)
-                    
-                    if des1 is not None and des2 is not None:
-                        # FLANN matcher
-                        FLANN_INDEX_KDTREE = 1
-                        index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
-                        search_params = dict(checks=50)
-                        flann = cv2.FlannBasedMatcher(index_params, search_params)
-                        
-                        matches = flann.knnMatch(des1, des2, k=2)
-                        
-                        # Apply ratio test
-                        good_matches = []
-                        for match_pair in matches:
-                            if len(match_pair) == 2:
-                                m, n = match_pair
-                                if m.distance < 0.7 * n.distance:
-                                    good_matches.append(m)
-                        
-                        # Calculate match score
-                        match_ratio = len(good_matches) / max(len(kp1), len(kp2))
-                        combined_score = (max_val * 0.5 + match_ratio * 0.5) * 100
-                    else:
-                        combined_score = max_val * 100
+                    combined_score = max_val * 100
                     
                     template_name = template_path.stem
                     analysis["matches"].append({
@@ -194,7 +183,7 @@ class TemplateMatcher:
                         best_template = template_name
                 
                 except Exception as e:
-                    print(f"Error matching template {template_path}: {str(e)}")
+                    print(f"⚠️  Error matching template {template_path.name}: {str(e)}")
                     continue
             
             if best_score > 60:  # Threshold for match
@@ -207,9 +196,10 @@ class TemplateMatcher:
         
         return analysis
     
-    def detect_security_patterns(self) -> Dict:
+    def detect_security_patterns(self, timeout_seconds: int = 5) -> Dict:
         """
         Detect security patterns like background patterns, security threads, etc.
+        Optimized with timeout to prevent hanging.
         """
         analysis = {
             "patterns_detected": False,
@@ -217,13 +207,23 @@ class TemplateMatcher:
             "confidence": 0
         }
         
+        start_time = time.time()
+        
         try:
             if self.image is None:
                 self.load_image()
             
+            # Resize for faster processing
+            h, w = self.gray_image.shape
+            if w > 1200 or h > 800:
+                scale = min(1200/w, 800/h)
+                resized = cv2.resize(self.gray_image, None, fx=scale, fy=scale)
+            else:
+                resized = self.gray_image
+            
             # Detect repetitive background patterns
             # Use Fourier Transform to detect periodic patterns
-            f_transform = np.fft.fft2(self.gray_image)
+            f_transform = np.fft.fft2(resized)
             f_shift = np.fft.fftshift(f_transform)
             magnitude = np.abs(f_shift)
             
@@ -237,9 +237,15 @@ class TemplateMatcher:
                 analysis["pattern_types"].append("repetitive_background")
                 analysis["confidence"] += 30
             
-            # Detect fine lines (security threads)
+            # Check timeout before expensive operations
+            if time.time() - start_time > timeout_seconds:
+                print(f"⚠️  Security pattern detection timeout")
+                analysis["warning"] = "Timed out"
+                return analysis
+            
+            # Detect fine lines (security threads) - OPTIMIZED
             # Use Canny edge detection with tight parameters
-            edges = cv2.Canny(self.gray_image, 100, 200)
+            edges = cv2.Canny(resized, 100, 200)
             
             # Use Hough Line Transform to detect straight lines
             lines = cv2.HoughLinesP(
@@ -251,14 +257,22 @@ class TemplateMatcher:
                 maxLineGap=5
             )
             
-            if lines is not None:
+            if lines is not None and len(lines) > 0:
+                # OPTIMIZED: Limit line comparison to prevent O(n²) explosion
+                max_lines_to_check = 50
+                if len(lines) > max_lines_to_check:
+                    lines = lines[:max_lines_to_check]
+                
                 # Count parallel lines (typical of security patterns)
                 parallel_count = 0
-                for i, line1 in enumerate(lines):
+                for i, line1 in enumerate(lines[:25]):  # Check only first 25 lines
+                    if time.time() - start_time > timeout_seconds:
+                        break
+                    
                     x1, y1, x2, y2 = line1[0]
                     angle1 = np.arctan2(y2 - y1, x2 - x1)
                     
-                    for line2 in lines[i+1:]:
+                    for line2 in lines[i+1:i+10]:  # Compare with next 10 lines only
                         x3, y3, x4, y4 = line2[0]
                         angle2 = np.arctan2(y4 - y3, x4 - x3)
                         
@@ -271,10 +285,16 @@ class TemplateMatcher:
                     analysis["pattern_types"].append("parallel_lines")
                     analysis["confidence"] += 25
             
-            # Detect microprinting (very small text)
+            # Check timeout
+            if time.time() - start_time > timeout_seconds:
+                print(f"⚠️  Security pattern detection timeout")
+                analysis["warning"] = "Timed out"
+                return analysis
+            
+            # Detect microprinting (very small text) - SIMPLIFIED
             # Look for high-frequency edges in small regions
-            sobelx = cv2.Sobel(self.gray_image, cv2.CV_64F, 1, 0, ksize=3)
-            sobely = cv2.Sobel(self.gray_image, cv2.CV_64F, 0, 1, ksize=3)
+            sobelx = cv2.Sobel(resized, cv2.CV_64F, 1, 0, ksize=3)
+            sobely = cv2.Sobel(resized, cv2.CV_64F, 0, 1, ksize=3)
             edge_magnitude = np.sqrt(sobelx**2 + sobely**2)
             
             # High edge density in small areas indicates microprinting
@@ -282,13 +302,15 @@ class TemplateMatcher:
             h, w = edge_magnitude.shape
             microprint_regions = 0
             
-            for i in range(0, h - kernel_size, kernel_size):
-                for j in range(0, w - kernel_size, kernel_size):
+            # Sample only a grid of regions (not every pixel)
+            step_size = kernel_size * 2  # Skip regions for speed
+            for i in range(0, h - kernel_size, step_size):
+                for j in range(0, w - kernel_size, step_size):
                     region = edge_magnitude[i:i+kernel_size, j:j+kernel_size]
                     if np.mean(region) > np.mean(edge_magnitude) * 1.5:
                         microprint_regions += 1
             
-            if microprint_regions > 5:
+            if microprint_regions > 3:  # Lower threshold due to sampling
                 analysis["patterns_detected"] = True
                 analysis["pattern_types"].append("microprinting")
                 analysis["confidence"] += 20

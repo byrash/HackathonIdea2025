@@ -2,8 +2,9 @@ import exifread
 from PIL import Image
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import json
+import requests
 
 
 class MetadataAnalyzer:
@@ -214,6 +215,156 @@ class MetadataAnalyzer:
         
         return analysis
     
+    def extract_gps_location(self) -> Dict:
+        """
+        Extract GPS coordinates from EXIF data and convert to human-readable location.
+        Returns coordinates and reverse geocoded address.
+        """
+        analysis = {
+            "gps_found": False,
+            "latitude": None,
+            "longitude": None,
+            "altitude": None,
+            "location_name": None,
+            "city": None,
+            "state": None,
+            "country": None,
+            "map_url": None,
+            "warnings": []
+        }
+        
+        try:
+            # Extract GPS coordinates from EXIF
+            if 'GPS GPSLatitude' in self.exif_data and 'GPS GPSLongitude' in self.exif_data:
+                # Parse GPS coordinates
+                lat = self._convert_gps_to_decimal(
+                    self.exif_data['GPS GPSLatitude'],
+                    self.exif_data.get('GPS GPSLatitudeRef', 'N')
+                )
+                lon = self._convert_gps_to_decimal(
+                    self.exif_data['GPS GPSLongitude'],
+                    self.exif_data.get('GPS GPSLongitudeRef', 'E')
+                )
+                
+                if lat is not None and lon is not None:
+                    analysis["gps_found"] = True
+                    analysis["latitude"] = lat
+                    analysis["longitude"] = lon
+                    
+                    # Extract altitude if available
+                    if 'GPS GPSAltitude' in self.exif_data:
+                        try:
+                            alt_str = self.exif_data['GPS GPSAltitude']
+                            # Parse fraction format like "123/1"
+                            if '/' in alt_str:
+                                num, den = alt_str.split('/')
+                                analysis["altitude"] = float(num) / float(den)
+                            else:
+                                analysis["altitude"] = float(alt_str)
+                        except Exception:
+                            pass
+                    
+                    # Create map URL
+                    analysis["map_url"] = f"https://www.google.com/maps?q={lat},{lon}"
+                    
+                    # Reverse geocode to get address (using free OpenStreetMap Nominatim API)
+                    try:
+                        location_data = self._reverse_geocode(lat, lon)
+                        if location_data:
+                            analysis["location_name"] = location_data.get("display_name")
+                            address = location_data.get("address", {})
+                            analysis["city"] = address.get("city") or address.get("town") or address.get("village")
+                            analysis["state"] = address.get("state")
+                            analysis["country"] = address.get("country")
+                            
+                            print(f"📍 GPS Location: {lat:.6f}, {lon:.6f}")
+                            if analysis["city"]:
+                                print(f"   Address: {analysis['city']}, {analysis['state']}, {analysis['country']}")
+                    except Exception as e:
+                        analysis["warnings"].append(f"Reverse geocoding failed: {str(e)}")
+                        print(f"⚠️  Could not reverse geocode: {str(e)}")
+        
+        except Exception as e:
+            analysis["warnings"].append(f"GPS extraction failed: {str(e)}")
+            print(f"Error extracting GPS: {str(e)}")
+        
+        return analysis
+    
+    def _convert_gps_to_decimal(self, coord_str: str, ref: str) -> Optional[float]:
+        """
+        Convert GPS coordinates from EXIF format to decimal degrees.
+        EXIF format: "[12, 34, 56.78]" where values are degrees, minutes, seconds
+        """
+        try:
+            # Remove brackets and split
+            coord_str = coord_str.strip('[]')
+            parts = [p.strip() for p in coord_str.split(',')]
+            
+            if len(parts) != 3:
+                return None
+            
+            # Parse degrees, minutes, seconds (may be fractions like "123/1")
+            degrees = self._parse_fraction(parts[0])
+            minutes = self._parse_fraction(parts[1])
+            seconds = self._parse_fraction(parts[2])
+            
+            # Convert to decimal
+            decimal = degrees + (minutes / 60.0) + (seconds / 3600.0)
+            
+            # Apply hemisphere (S and W are negative)
+            if ref in ['S', 'W']:
+                decimal = -decimal
+            
+            return decimal
+            
+        except Exception as e:
+            print(f"Error converting GPS coordinate: {str(e)}")
+            return None
+    
+    def _parse_fraction(self, value_str: str) -> float:
+        """Parse a value that might be a fraction (e.g., "123/1" or "12.34")."""
+        try:
+            if '/' in value_str:
+                num, den = value_str.split('/')
+                return float(num) / float(den)
+            else:
+                return float(value_str)
+        except Exception:
+            return 0.0
+    
+    def _reverse_geocode(self, lat: float, lon: float, timeout: int = 3) -> Optional[Dict]:
+        """
+        Reverse geocode coordinates to get human-readable address.
+        Uses OpenStreetMap Nominatim API (free, no API key required).
+        """
+        try:
+            url = "https://nominatim.openstreetmap.org/reverse"
+            params = {
+                "lat": lat,
+                "lon": lon,
+                "format": "json",
+                "addressdetails": 1,
+                "zoom": 18
+            }
+            headers = {
+                "User-Agent": "CheckFraudDetection/1.0"  # Required by Nominatim
+            }
+            
+            response = requests.get(url, params=params, headers=headers, timeout=timeout)
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"⚠️  Reverse geocoding returned status {response.status_code}")
+                return None
+                
+        except requests.exceptions.Timeout:
+            print("⚠️  Reverse geocoding timeout")
+            return None
+        except Exception as e:
+            print(f"⚠️  Reverse geocoding error: {str(e)}")
+            return None
+    
     def check_exif_consistency(self) -> Dict:
         """
         Check for EXIF data consistency and completeness.
@@ -274,6 +425,7 @@ class MetadataAnalyzer:
             "camera_analysis": self.analyze_camera_model(),
             "modification_analysis": self.detect_software_modifications(),
             "consistency_analysis": self.check_exif_consistency(),
+            "gps_location": self.extract_gps_location(),
             "all_exif_data": self.exif_data,
             "overall_risk_score": 0,
             "flags": []
@@ -302,6 +454,19 @@ class MetadataAnalyzer:
             results["flags"].append("No device information found")
         
         results["overall_risk_score"] = min(100, risk_factors)
+        
+        # GPS-based risk adjustment
+        gps_location = results.get("gps_location", {})
+        if gps_location.get("gps_found"):
+            country = gps_location.get("country", "").lower()
+            # USA checks are generally lower risk
+            if "united states" in country or country in ["usa", "us"]:
+                results["overall_risk_score"] = max(0, results["overall_risk_score"] - 10)
+                results["flags"].append("USA location detected - adjusted risk down")
+            # International checks may warrant higher scrutiny
+            elif country and country not in ["united states", "usa", "us"]:
+                results["overall_risk_score"] = min(100, results["overall_risk_score"] + 5)
+                results["flags"].append(f"International location ({gps_location.get('country')}) - manual review suggested")
         
         return results
     

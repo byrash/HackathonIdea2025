@@ -199,8 +199,11 @@ class ForensicAnalyzer:
     
     def edge_detection_analysis(self) -> Dict:
         """
-        Edge Detection and Boundary Analysis - Detects irregular edges around text.
-        Identifies white-out, correction fluid, or cut-and-paste boundaries.
+        Edge Detection and Boundary Analysis - LENIENT version for photos.
+        Only flags EXTREME anomalies that clearly indicate digital manipulation.
+        
+        NOTE: Photos naturally have irregular edges from shadows, lighting, 
+        background objects - this is NORMAL and not suspicious.
         """
         analysis = {
             "success": False,
@@ -220,64 +223,39 @@ class ForensicAnalyzer:
             edge_density = np.sum(edges > 0) / edges.size * 100
             analysis["edge_density_score"] = float(edge_density)
             
-            # Detect sudden changes in edge patterns (indicates tampering)
-            # Divide image into grid
+            # VERY LENIENT: Only flag EXTREME edge density deviations
+            # Photos naturally have varied edge patterns (shadows, background, etc.)
             h, w = edges.shape
             grid_size = 100
+            extreme_deviations = []
             
             for i in range(0, h - grid_size, grid_size):
                 for j in range(0, w - grid_size, grid_size):
                     region = edges[i:i+grid_size, j:j+grid_size]
                     region_density = np.sum(region > 0) / region.size * 100
                     
-                    # Flag regions with unusual edge density
-                    if region_density > edge_density * 2 or region_density < edge_density * 0.3:
-                        if region_density > 5:  # Ignore nearly empty regions
-                            analysis["irregular_edges"].append({
-                                "coordinates": {
-                                    "x": int(j),
-                                    "y": int(i),
-                                    "width": int(grid_size),
-                                    "height": int(grid_size)
-                                },
-                                "edge_density": float(region_density),
-                                "deviation": float(abs(region_density - edge_density)),
-                                "reason": "Unusual edge pattern detected"
-                            })
-            
-            # Detect straight edges (common in cut-and-paste)
-            lines = cv2.HoughLinesP(
-                edges,
-                rho=1,
-                theta=np.pi/180,
-                threshold=50,
-                minLineLength=50,
-                maxLineGap=10
-            )
-            
-            if lines is not None:
-                # Filter for perfectly horizontal or vertical lines (suspicious)
-                suspicious_lines = []
-                for line in lines:
-                    x1, y1, x2, y2 = line[0]
-                    
-                    # Check if line is perfectly horizontal or vertical
-                    if abs(y2 - y1) < 5:  # Horizontal
-                        suspicious_lines.append({
-                            "type": "horizontal",
-                            "coordinates": {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2)},
-                            "length": int(abs(x2 - x1))
+                    # Only flag EXTREME outliers (5x deviation, not 2x)
+                    # This catches obvious tampering but ignores normal photo variations
+                    if region_density > edge_density * 5 and region_density > 20:
+                        extreme_deviations.append({
+                            "coordinates": {
+                                "x": int(j),
+                                "y": int(i),
+                                "width": int(grid_size),
+                                "height": int(grid_size)
+                            },
+                            "edge_density": float(region_density),
+                            "deviation": float(abs(region_density - edge_density)),
+                            "reason": "Extreme edge density anomaly (possible digital overlay)"
                         })
-                    elif abs(x2 - x1) < 5:  # Vertical
-                        suspicious_lines.append({
-                            "type": "vertical",
-                            "coordinates": {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2)},
-                            "length": int(abs(y2 - y1))
-                        })
-                
-                # Only flag if there are many suspicious lines
-                if len(suspicious_lines) > 20:
-                    analysis["suspicious_boundaries"] = suspicious_lines[:10]  # Limit output
+            
+            # Only report if we have MANY extreme deviations (likely actual tampering)
+            if len(extreme_deviations) > 5:
+                analysis["irregular_edges"] = extreme_deviations[:5]  # Limit to top 5
+            
+            # REMOVED: Suspicious straight line detection
+            # Photos of checks naturally have straight edges (check borders, table edges, etc.)
+            # This was causing too many false positives
             
             analysis["success"] = True
             
@@ -384,16 +362,12 @@ class ForensicAnalyzer:
             risk_score += 25
             results["summary"].append("Cloned regions detected")
         
-        # Edge analysis findings
+        # Edge analysis findings (LENIENT - only extreme anomalies)
         irregular_edges = len(results["edgeAnalysis"].get("irregular_edges", []))
-        if irregular_edges > 3:
-            risk_score += min(20, irregular_edges * 5)
-            results["summary"].append(f"{irregular_edges} irregular edge region(s) found")
-        
-        suspicious_boundaries = len(results["edgeAnalysis"].get("suspicious_boundaries", []))
-        if suspicious_boundaries > 0:
-            risk_score += 15
-            results["summary"].append("Suspicious straight boundaries detected")
+        if irregular_edges > 0:
+            # Only add significant risk if multiple EXTREME anomalies found
+            risk_score += min(15, irregular_edges * 3)
+            results["summary"].append(f"{irregular_edges} extreme edge anomaly(ies) detected")
         
         # Texture anomalies
         texture_anomalies = len(results["colorTextureAnalysis"].get("anomalies", []))

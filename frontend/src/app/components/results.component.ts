@@ -129,6 +129,54 @@ import { AnalysisResults, ApiService } from '../services/api.service';
         </div>
       </div>
 
+      <!-- GPS Location (if available) -->
+      <div *ngIf="results.metadata_analysis?.gps_location?.gps_found" class="bg-white rounded-lg shadow-lg p-6">
+        <h3 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+          <span class="mr-2">📍</span>
+          GPS Location
+        </h3>
+        <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+          <div class="flex-1">
+            <div class="space-y-3">
+              <div>
+                <p class="text-sm text-gray-600">Location</p>
+                <p class="text-lg font-medium text-gray-800">
+                  {{ results.metadata_analysis.gps_location.city || 'Unknown' }}<span *ngIf="results.metadata_analysis.gps_location.state">, {{ results.metadata_analysis.gps_location.state }}</span>
+                </p>
+                <p class="text-sm text-gray-600">{{ results.metadata_analysis.gps_location.country }}</p>
+              </div>
+              <div>
+                <p class="text-sm text-gray-600">Coordinates</p>
+                <p class="font-mono text-sm text-gray-700">
+                  {{ results.metadata_analysis.gps_location.latitude?.toFixed(6) }}°, {{ results.metadata_analysis.gps_location.longitude?.toFixed(6) }}°
+                </p>
+              </div>
+              <div *ngIf="isUSALocation(results.metadata_analysis.gps_location)" 
+                   class="inline-flex items-center px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
+                <svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                </svg>
+                USA Location (Lower Fraud Risk)
+              </div>
+            </div>
+          </div>
+          <div class="flex-shrink-0">
+            <a 
+              *ngIf="results.metadata_analysis.gps_location.map_url" 
+              [href]="results.metadata_analysis.gps_location.map_url" 
+              target="_blank"
+              class="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-md"
+            >
+              <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>
+              </svg>
+              View on Map
+            </a>
+          </div>
+        </div>
+      </div>
+
       <!-- Analysis Details -->
       <div class="bg-white rounded-lg shadow-lg p-6">
         <h3 class="text-xl font-bold text-gray-800 mb-4">Detailed Analysis</h3>
@@ -281,6 +329,36 @@ import { AnalysisResults, ApiService } from '../services/api.service';
                       ⚠️ {{ issue }}
                     </p>
                   </div>
+                </div>
+              </div>
+
+              <!-- GPS Location Information -->
+              <div *ngIf="results.metadata_analysis?.gps_location" class="mb-4 p-3 bg-white rounded border">
+                <p class="text-xs font-semibold text-gray-600 mb-2">📍 GPS Location</p>
+                <div *ngIf="results.metadata_analysis.gps_location.gps_found" class="text-sm space-y-2">
+                  <div>
+                    <p class="font-medium text-gray-800">
+                      {{ results.metadata_analysis.gps_location.city || 'Unknown' }}<span *ngIf="results.metadata_analysis.gps_location.state">, {{ results.metadata_analysis.gps_location.state }}</span>
+                    </p>
+                    <p class="text-xs text-gray-600">{{ results.metadata_analysis.gps_location.country }}</p>
+                  </div>
+                  <div class="text-xs text-gray-600 font-mono">
+                    {{ results.metadata_analysis.gps_location.latitude?.toFixed(6) }}°, {{ results.metadata_analysis.gps_location.longitude?.toFixed(6) }}°
+                  </div>
+                  <a 
+                    *ngIf="results.metadata_analysis.gps_location.map_url" 
+                    [href]="results.metadata_analysis.gps_location.map_url" 
+                    target="_blank"
+                    class="inline-flex items-center px-3 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 transition-colors"
+                  >
+                    🗺️ View on Map
+                  </a>
+                  <div *ngIf="isUSALocation(results.metadata_analysis.gps_location)" class="text-green-600 text-xs mt-1">
+                    ✓ USA location (lower fraud risk)
+                  </div>
+                </div>
+                <div *ngIf="!results.metadata_analysis.gps_location.gps_found" class="text-xs text-gray-500">
+                  No GPS data found (normal for scanned checks)
                 </div>
               </div>
 
@@ -459,7 +537,7 @@ export class ResultsComponent {
     const exifData = this.results.metadata_analysis?.all_exif_data || {};
     return Object.entries(exifData).map(([key, value]) => ({ 
       key, 
-      value: typeof value === 'object' ? JSON.stringify(value) : String(value)
+      value: typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? '')
     }));
   }
 
@@ -493,5 +571,11 @@ export class ResultsComponent {
     } catch {
       return timestamp;
     }
+  }
+
+  isUSALocation(gpsLocation: any): boolean {
+    if (!gpsLocation?.country) return false;
+    const country = gpsLocation.country.toLowerCase();
+    return country.includes('united states') || country.includes('usa') || country === 'us';
   }
 }

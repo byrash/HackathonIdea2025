@@ -85,13 +85,60 @@ class ImageProcessor:
         )
         return denoised
     
+    def detect_check_orientation(self, image: np.ndarray) -> int:
+        """
+        Detect if check needs 90/180/270 degree rotation.
+        Returns: 0 (no rotation), 90, 180, or 270 degrees
+        
+        Uses aspect ratio to detect orientation.
+        Standard checks have 2:1 to 3:1 width:height ratio (landscape).
+        """
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape
+        
+        # Check aspect ratio - checks are typically wider than tall (landscape)
+        aspect_ratio = w / h
+        
+        # Standard check dimensions are roughly 6" x 2.75" (ratio ~2.18:1)
+        # If portrait orientation (height > width), needs rotation
+        if aspect_ratio < 0.95:  # Clearly portrait (allow 5% margin)
+            print(f"📐 Portrait detected ({w}x{h}, ratio {aspect_ratio:.2f}), rotating 90°")
+            return 90
+        elif aspect_ratio >= 0.95 and aspect_ratio <= 1.5:
+            # Nearly square or slight landscape - could be a cropped check
+            # Check if it's actually portrait that needs rotation
+            if aspect_ratio < 1.05:
+                print(f"📐 Nearly square ({w}x{h}, ratio {aspect_ratio:.2f}), might need rotation")
+                # Try OCR-based detection: look for text orientation
+                # For now, don't rotate - assume correct
+                print("   → Keeping as-is (within tolerance)")
+            else:
+                print(f"📐 Moderate landscape ({w}x{h}, ratio {aspect_ratio:.2f}), OK")
+            return 0
+        else:
+            # Good landscape orientation (ratio > 1.5)
+            print(f"📐 Landscape detected ({w}x{h}, ratio {aspect_ratio:.2f}), orientation OK")
+        
+        return 0
+    
     def correct_orientation(self, image: np.ndarray) -> np.ndarray:
         """
-        Detect and correct minor image skew (disabled for checks to prevent incorrect rotation).
-        Checks are typically scanned properly and aggressive rotation can cause issues.
+        Detect and correct check orientation (90/180/270 degree rotations).
+        Handles rotated check images properly.
         """
-        # DISABLED: Hough line detection can incorrectly rotate check images
-        # Only enable minor skew correction (< 5 degrees) if absolutely necessary
+        # First detect if major rotation is needed
+        rotation_needed = self.detect_check_orientation(image)
+        
+        if rotation_needed == 90:
+            print("🔄 Rotating check 90° clockwise")
+            image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+        elif rotation_needed == 180:
+            print("🔄 Rotating check 180°")
+            image = cv2.rotate(image, cv2.ROTATE_180)
+        elif rotation_needed == 270:
+            print("🔄 Rotating check 270° (90° counter-clockwise)")
+            image = cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        
         return image
     
     def rotate_image(self, image: np.ndarray, angle: float) -> np.ndarray:
@@ -142,6 +189,70 @@ class ImageProcessor:
         
         return image
     
+    def auto_crop_check(self, image: np.ndarray) -> np.ndarray:
+        """
+        Automatically crop to check boundaries, removing excess background.
+        Conservative approach - only crops if significant borders detected.
+        """
+        img_h, img_w = image.shape[:2]
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Apply threshold to find check boundaries
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Invert if background is dark
+        if np.mean(thresh) < 127:
+            thresh = cv2.bitwise_not(thresh)
+        
+        # Find contours
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            print("✂️  No crop needed (no contours found)")
+            return image
+        
+        # Find largest contour (should be the check)
+        largest_contour = max(contours, key=cv2.contourArea)
+        contour_area = cv2.contourArea(largest_contour)
+        image_area = img_w * img_h
+        
+        # If contour is >90% of image, probably no significant border
+        if contour_area > image_area * 0.90:
+            print(f"✂️  No crop needed (check fills {contour_area/image_area*100:.1f}% of image)")
+            return image
+        
+        x, y, w, h = cv2.boundingRect(largest_contour)
+        
+        # Add small padding (2% of dimensions)
+        padding_x = int(w * 0.02)
+        padding_y = int(h * 0.02)
+        
+        # Ensure we don't go out of bounds
+        x = max(0, x - padding_x)
+        y = max(0, y - padding_y)
+        w = min(img_w - x, w + 2 * padding_x)
+        h = min(img_h - y, h + 2 * padding_y)
+        
+        # Calculate border sizes
+        left_border = x / img_w
+        top_border = y / img_h
+        right_border = (img_w - (x + w)) / img_w
+        bottom_border = (img_h - (y + h)) / img_h
+        
+        # Only crop if we're removing significant border (>8% on any side)
+        # This prevents cropping already well-framed images
+        max_border = max(left_border, top_border, right_border, bottom_border)
+        
+        if max_border > 0.08:
+            cropped = image[y:y+h, x:x+w]
+            removed_percent = (1 - (w * h) / (img_w * img_h)) * 100
+            print(f"✂️  Auto-cropped: {img_w}x{img_h} → {w}x{h} (removed {removed_percent:.1f}% border)")
+            return cropped
+        else:
+            print(f"✂️  No crop needed (max border only {max_border*100:.1f}%)")
+        
+        return image
+    
     def sharpen_image(self, image: np.ndarray) -> np.ndarray:
         """
         Sharpen image to improve text clarity.
@@ -152,17 +263,128 @@ class ImageProcessor:
         sharpened = cv2.filter2D(image, -1, kernel)
         return sharpened
     
-    def preprocess(self) -> dict:
+    def detect_and_crop_check(self, image: np.ndarray, check_bounds: dict = None) -> np.ndarray:
+        """
+        Crop image to check boundaries.
+        If check_bounds provided (from OCR detection), use those.
+        Otherwise, detect check boundaries using contour detection.
+        """
+        try:
+            # If bounds provided by OCR, use them directly
+            if check_bounds and all(k in check_bounds for k in ['x', 'y', 'width', 'height']):
+                x = check_bounds['x']
+                y = check_bounds['y']
+                cw = check_bounds['width']
+                ch = check_bounds['height']
+                h, w = image.shape[:2]
+                
+                # Validate bounds are within image
+                if x >= 0 and y >= 0 and x + cw <= w and y + ch <= h:
+                    cropped = image[y:y+ch, x:x+cw]
+                    print(f"✂️  Cropped using OCR-detected bounds: {w}x{h} → {cw}x{ch}")
+                    return cropped
+                else:
+                    print("⚠️  Invalid bounds from OCR, falling back to contour detection")
+            
+            # Fallback: Detect check using contours
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            h, w = gray.shape
+            
+            # Apply threshold to find check boundaries
+            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # Invert if background is dark
+            if np.mean(thresh) < 127:
+                thresh = cv2.bitwise_not(thresh)
+            
+            # Find contours
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if not contours:
+                print("⚠️  No contours found for check detection")
+                return image
+            
+            # Sort contours by area (largest first)
+            contours_sorted = sorted(contours, key=cv2.contourArea, reverse=True)
+            
+            # Try to find a valid check among top 3 largest contours
+            for i, contour in enumerate(contours_sorted[:3]):
+                contour_area = cv2.contourArea(contour)
+                image_area = w * h
+                
+                # Skip tiny contours
+                if contour_area < image_area * 0.15:
+                    continue
+                
+                # Get bounding box
+                x, y, cw, ch = cv2.boundingRect(contour)
+                bbox_area = cw * ch
+                
+                # Validate this is actually a check
+                aspect_ratio = cw / ch if ch > 0 else 0
+                rectangularity = contour_area / bbox_area if bbox_area > 0 else 0
+                size_ratio = contour_area / image_area
+                longer_side = max(cw, ch)
+                
+                # Check validation criteria
+                is_landscape = 1.5 <= aspect_ratio <= 4.0
+                is_portrait = 0.25 <= aspect_ratio <= 0.67
+                is_rectangular = rectangularity >= 0.75
+                is_big_enough = size_ratio >= 0.20 and longer_side >= 800
+                
+                if (is_landscape or is_portrait) and is_rectangular and is_big_enough:
+                    orientation = "landscape" if is_landscape else "portrait"
+                    print(f"✅ Check detected: {cw}x{ch}, {orientation}, {size_ratio*100:.1f}% of image")
+                    
+                    # If check fills most of image (>85%), no need to crop
+                    if contour_area > image_area * 0.85:
+                        print(f"✓ Check fills {contour_area/image_area*100:.1f}% of image - no crop needed")
+                        return image
+                    
+                    # Add small padding (1% of dimensions)
+                    padding_x = int(cw * 0.01)
+                    padding_y = int(ch * 0.01)
+                    
+                    # Ensure we don't go out of bounds
+                    x = max(0, x - padding_x)
+                    y = max(0, y - padding_y)
+                    cw = min(w - x, cw + 2 * padding_x)
+                    ch = min(h - y, ch + 2 * padding_y)
+                    
+                    # Crop to check
+                    cropped = image[y:y+ch, x:x+cw]
+                    print(f"✂️  Cropped to check boundaries: {w}x{h} → {cw}x{ch}")
+                    
+                    return cropped
+                else:
+                    print(f"⚠️  Contour #{i+1}: aspect={aspect_ratio:.2f}, rect={rectangularity:.2f}, size={size_ratio:.2f}")
+            
+            # No valid check found - use full image as fallback
+            print("⚠️  No valid check detected - using full image")
+            return image
+            
+        except Exception as e:
+            print(f"⚠️  Check detection failed: {e}")
+            return image
+    
+    def preprocess(self, check_bounds: dict = None) -> dict:
         """
         Execute complete preprocessing pipeline.
         Returns processed image and preprocessing results.
+        
+        OPTIMAL WORKFLOW:
+        1. Load image
+        2. Detect and crop to check boundaries (remove background)
+        3. Apply enhancements only if needed
+        4. Save processed (cropped + enhanced) image
         """
         results = {
             "success": False,
             "steps_completed": [],
             "original_size": None,
             "processed_size": None,
-            "warnings": []
+            "warnings": [],
+            "check_detected": False
         }
         
         # Load image
@@ -173,47 +395,77 @@ class ImageProcessor:
         results["original_size"] = self.image.shape[:2]
         results["steps_completed"].append("Image loaded")
         
-        # Step 1: Enhance brightness and contrast
-        try:
-            enhanced = self.enhance_image()
-            results["steps_completed"].append("Enhanced quality")
-        except Exception as e:
-            results["warnings"].append(f"Enhancement failed: {str(e)}")
-            enhanced = self.image.copy()
+        # STEP 1: Skip cropping (too slow and often unnecessary)
+        # Just use the full image for processing
+        processed = self.image.copy()
+        results["steps_completed"].append("Using full image (no cropping)")
         
-        # Step 2: Reduce noise
-        try:
-            denoised = self.reduce_noise(enhanced)
-            results["steps_completed"].append("Noise reduced")
-        except Exception as e:
-            results["warnings"].append(f"Noise reduction failed: {str(e)}")
-            denoised = enhanced
+        # STEP 2: Assess image quality on the cropped check
+        # Temporarily set processed_image for quality assessment
+        temp_processed = self.processed_image
+        self.processed_image = processed
+        quality_info = self.get_image_quality_score()
+        self.processed_image = temp_processed
+        results["original_quality"] = quality_info
         
-        # Step 3: Correct orientation (disabled by default for checks)
-        try:
-            oriented = self.correct_orientation(denoised)
-            results["steps_completed"].append("Orientation checked")
-        except Exception as e:
-            results["warnings"].append(f"Orientation check failed: {str(e)}")
-            oriented = denoised
+        # STEP 3: Apply enhancements only if needed (on cropped check)
+        if quality_info["brightness_score"] < 60 or quality_info["sharpness_score"] < 40:
+            # Enhance brightness and contrast (only if needed)
+            if quality_info["brightness_score"] < 60:
+                try:
+                    # Temporarily set image for enhancement
+                    temp_img = self.image
+                    self.image = processed
+                    processed = self.enhance_image()
+                    self.image = temp_img
+                    results["steps_completed"].append("Enhanced quality (low brightness)")
+                except Exception as e:
+                    results["warnings"].append(f"Enhancement failed: {str(e)}")
+            
+            # Sharpen if blurry
+            if quality_info["sharpness_score"] < 40:
+                try:
+                    processed = self.sharpen_image(processed)
+                    results["steps_completed"].append("Image sharpened (low sharpness)")
+                except Exception as e:
+                    results["warnings"].append(f"Sharpening failed: {str(e)}")
+        else:
+            results["steps_completed"].append("High quality - minimal processing")
         
-        # Step 4: Deskew (conservative - only minor corrections)
+        # STEP 4: Conservative deskew (only fix obvious skew)
         try:
-            deskewed = self.deskew_image(oriented)
-            results["steps_completed"].append("Minor skew corrected")
+            gray = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+            lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=100, minLineLength=100, maxLineGap=10)
+            
+            if lines is not None and len(lines) > 5:
+                angles = []
+                for line in lines:
+                    x1, y1, x2, y2 = line[0]
+                    angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+                    # Only consider near-horizontal lines
+                    if abs(angle) < 10 or abs(angle - 90) < 10 or abs(angle + 90) < 10:
+                        angles.append(angle)
+                
+                if len(angles) > 3:
+                    median_angle = np.median(angles)
+                    # Normalize to [-10, 10] range
+                    if median_angle > 80:
+                        median_angle -= 90
+                    elif median_angle < -80:
+                        median_angle += 90
+                    
+                    # Only deskew if angle is between 1-8 degrees
+                    if 1 < abs(median_angle) < 8:
+                        print(f"🔄 Detected skew: {median_angle:.2f}°, correcting...")
+                        processed = self.rotate_image(processed, median_angle)
+                        results["steps_completed"].append(f"Corrected {median_angle:.2f}° skew")
+                    else:
+                        print(f"✓ Skew within acceptable range ({median_angle:.2f}°)")
         except Exception as e:
-            results["warnings"].append(f"Deskewing failed: {str(e)}")
-            deskewed = oriented
+            results["warnings"].append(f"Skew detection failed: {str(e)}")
         
-        # Step 5: Sharpen for better OCR
-        try:
-            sharpened = self.sharpen_image(deskewed)
-            results["steps_completed"].append("Image sharpened")
-        except Exception as e:
-            results["warnings"].append(f"Sharpening failed: {str(e)}")
-            sharpened = deskewed
-        
-        self.processed_image = sharpened
+        self.processed_image = processed
         results["processed_size"] = self.processed_image.shape[:2]
         results["success"] = True
         

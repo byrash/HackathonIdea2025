@@ -27,6 +27,7 @@ class OCRService:
         self.image = None
         self.gray_image = None
         self.extracted_text = ""
+        self.check_bounds = None  # Store detected check bounds
     
     def load_image(self) -> bool:
         """Load image for OCR processing."""
@@ -117,7 +118,7 @@ class OCRService:
             print(f"✅ Check number found: {final_check_num}")
             return final_check_num
         
-        print(f"⚠️  Check number not found")
+            print("⚠️  Check number not found")
         return None
     
     def extract_date(self) -> Optional[str]:
@@ -140,7 +141,7 @@ class OCRService:
                 print(f"✅ Date found: {date}")
                 return date
         
-        print(f"⚠️  Date not found")
+        print("⚠️  Date not found")
         return None
     
     def extract_payee(self) -> Optional[str]:
@@ -176,7 +177,7 @@ class OCRService:
                 print(f"✅ Payee found (first line): {first_line}")
                 return first_line
         
-        print(f"⚠️  Payee not found")
+        print("⚠️  Payee not found")
         return None
     
     def extract_amount_numeric(self) -> Optional[float]:
@@ -236,7 +237,7 @@ class OCRService:
             
             return final_amount
         
-        print(f"⚠️  Amount not found")
+        print("⚠️  Amount not found")
         return None
     
     def _extract_amount_from_region(self) -> Optional[float]:
@@ -290,7 +291,7 @@ class OCRService:
                 print(f"✅ Amount extracted from region: ${final_amount:.2f}")
                 return final_amount
             
-            print(f"⚠️  Amount region extraction: no valid amount found")
+            print("⚠️  Amount region extraction: no valid amount found")
         except Exception as e:
             print(f"❌ Amount region extraction failed: {e}")
         
@@ -357,9 +358,202 @@ class OCRService:
         
         return result
     
+    def detect_check_region(self) -> Optional[Dict]:
+        """
+        Detect check region in the ORIGINAL image using contour detection.
+        Returns bounding box coordinates if valid check found.
+        Should be called BEFORE preprocessing.
+        """
+        try:
+            if self.gray_image is None:
+                self.load_image()
+            
+            gray = self.gray_image.copy()
+            h, w = gray.shape
+            
+            # Apply threshold to find check boundaries
+            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # Invert if background is dark
+            if np.mean(thresh) < 127:
+                thresh = cv2.bitwise_not(thresh)
+            
+            # Find contours
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if not contours:
+                print("⚠️  OCR check detection: No contours found")
+                return None
+            
+            # Sort contours by area (largest first)
+            contours_sorted = sorted(contours, key=cv2.contourArea, reverse=True)
+            
+            # Try to find a valid check among top 3 largest contours
+            for i, contour in enumerate(contours_sorted[:3]):
+                contour_area = cv2.contourArea(contour)
+                image_area = w * h
+                
+                # Skip tiny contours
+                if contour_area < image_area * 0.15:
+                    continue
+                
+                # Validate this is actually a check
+                is_valid, reason = self._validate_check_contour(contour, w, h)
+                
+                if is_valid:
+                    x, y, cw, ch = cv2.boundingRect(contour)  # noqa: F841
+                    
+                    # Add small padding (1%)
+                    padding_x = int(cw * 0.01)
+                    padding_y = int(ch * 0.01)
+                    
+                    x = max(0, x - padding_x)
+                    y = max(0, y - padding_y)
+                    cw = min(w - x, cw + 2 * padding_x)
+                    ch = min(h - y, ch + 2 * padding_y)
+                    
+                    self.check_bounds = {
+                        'x': x,
+                        'y': y,
+                        'width': cw,
+                        'height': ch
+                    }
+                    
+                    print(f"✅ OCR detected check region: ({x}, {y}) {cw}x{ch}")
+                    print(f"   {reason}")
+                    return self.check_bounds
+                else:
+                    print(f"⚠️  Contour #{i+1} rejected: {reason}")
+            
+            print("⚠️  OCR: No valid check region detected")
+            return None
+            
+        except Exception as e:
+            print(f"⚠️  OCR check detection failed: {e}")
+            return None
+    
+    def _validate_check_contour(self, contour, image_width: int, image_height: int) -> Tuple[bool, str]:
+        """
+        Validate that a contour is actually a check, not some other object.
+        
+        Returns: (is_valid, reason)
+        """
+        x, y, w, h = cv2.boundingRect(contour)
+        contour_area = cv2.contourArea(contour)
+        bbox_area = w * h
+        image_area = image_width * image_height
+        
+        # 1. Check aspect ratio (checks are landscape 2:1-3:1, but could be rotated to portrait)
+        aspect_ratio = w / h if h > 0 else 0
+        # Accept both landscape (1.5-4.0) and portrait (0.25-0.67 which is 1/4 to 1/1.5)
+        is_landscape = 1.5 <= aspect_ratio <= 4.0
+        is_portrait = 0.25 <= aspect_ratio <= 0.67
+        
+        if not (is_landscape or is_portrait):
+            return False, f"Invalid aspect ratio {aspect_ratio:.2f} (need 1.5-4.0 or 0.25-0.67)"
+        
+        # 2. Check must be substantial size (at least 20% of image area)
+        size_ratio = contour_area / image_area
+        if size_ratio < 0.20:
+            return False, f"Too small {size_ratio*100:.1f}% (need >20% of image)"
+        
+        # 3. Check must be reasonably rectangular (contour fills bounding box)
+        rectangularity = contour_area / bbox_area if bbox_area > 0 else 0
+        if rectangularity < 0.75:
+            return False, f"Not rectangular enough {rectangularity*100:.1f}% (need >75%)"
+        
+        # 4. Check minimum absolute dimensions (at least 800px on longer side)
+        longer_side = max(w, h)
+        if longer_side < 800:
+            return False, f"Too small {longer_side}px (need >800px on longer side)"
+        
+        orientation = "landscape" if is_landscape else "portrait (may need rotation)"
+        return True, f"Valid check ({orientation}): {w}x{h}, ratio {aspect_ratio:.2f}, size {size_ratio*100:.1f}%"
+    
+    def _detect_and_crop_check(self) -> Optional[np.ndarray]:
+        """
+        Detect check boundaries and crop to just the check.
+        VALIDATES that detected object is actually a check before cropping.
+        This improves MICR extraction by removing background.
+        """
+        try:
+            gray = self.gray_image.copy()
+            h, w = gray.shape
+            
+            # Apply threshold to find check boundaries
+            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # Invert if background is dark
+            if np.mean(thresh) < 127:
+                thresh = cv2.bitwise_not(thresh)
+            
+            # Find contours
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if not contours:
+                print("⚠️  Check crop: No contours found, using full image")
+                return self.image
+            
+            # Sort contours by area (largest first)
+            contours_sorted = sorted(contours, key=cv2.contourArea, reverse=True)
+            
+            # Try to find a valid check among top 3 largest contours
+            valid_check_found = False
+            for i, contour in enumerate(contours_sorted[:3]):
+                contour_area = cv2.contourArea(contour)
+                image_area = w * h
+                
+                # Skip tiny contours
+                if contour_area < image_area * 0.15:
+                    continue
+                
+                # Validate this is actually a check
+                is_valid, reason = self._validate_check_contour(contour, w, h)
+                
+                if is_valid:
+                    print(f"✅ Check detected (contour #{i+1}): {reason}")
+                    valid_check_found = True
+                    
+                    # If check fills most of image (>85%), no need to crop
+                    if contour_area > image_area * 0.85:
+                        print(f"✓ Check fills {contour_area/image_area*100:.1f}% of image - no crop needed")
+                        return self.image
+                    
+                    x, y, cw, ch = cv2.boundingRect(contour)
+                    
+                    # Add small padding (1% of dimensions)
+                    padding_x = int(cw * 0.01)
+                    padding_y = int(ch * 0.01)
+                    
+                    # Ensure we don't go out of bounds
+                    x = max(0, x - padding_x)
+                    y = max(0, y - padding_y)
+                    cw = min(w - x, cw + 2 * padding_x)
+                    ch = min(h - y, ch + 2 * padding_y)
+                    
+                    # Crop to check
+                    cropped = self.image[y:y+ch, x:x+cw]
+                    print(f"✂️  Cropped to check: {w}x{h} → {cw}x{ch}")
+                    
+                    return cropped
+                else:
+                    print(f"⚠️  Contour #{i+1} rejected: {reason}")
+            
+            # No valid check found - use full image as fallback
+            if not valid_check_found:
+                print("⚠️  No valid check contour detected - using full image")
+                print("    This could mean: check fills frame, poor lighting, or no check in photo")
+            
+            return self.image
+            
+        except Exception as e:
+            print(f"⚠️  Check crop failed: {e}, using full image")
+            return self.image
+    
     def _extract_micr_from_region(self) -> Dict:
         """
         Extract MICR line from bottom region of check with enhanced preprocessing.
+        Assumes image has already been preprocessed (cropped to check boundaries).
         Saves intermediate images for debugging.
         """
         result = {
@@ -374,18 +568,11 @@ class OCRService:
                 self.load_image()
             
             h, w = self.image.shape[:2]
+            print(f"📏 Image dimensions for MICR extraction: {w}x{h}")
             
-            # Extract MICR from bottom region
-            
-            # MICR line is at the bottom of the check (bottom 8-12%)
-            # Be more precise with the crop
+            # Extract MICR from bottom of check (bottom 8-12%)
             y_start = int(h * 0.88)
-            micr_region = self.image[y_start:, :]  # Use color image first
             micr_gray = self.gray_image[y_start:, :]
-            
-            # Save MICR region for debugging
-            micr_debug_path = self.image_path.replace('_original', '_micr_region')
-            cv2.imwrite(micr_debug_path, micr_region)
             
             # Enhanced preprocessing approaches for MICR
             preprocessed_images = []
@@ -495,7 +682,7 @@ class OCRService:
                     break
             
             if not result["routing_number"]:
-                print(f"⚠️  MICR: No valid routing number found (E-13B font limitation)")
+                    print("⚠️  MICR: No valid routing number found (E-13B font limitation)")
             
         except Exception as e:
             print(f"❌ MICR extraction failed: {e}")
